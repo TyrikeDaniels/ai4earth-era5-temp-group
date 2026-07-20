@@ -1,0 +1,102 @@
+base: &base
+  train_years: [2020,2021,2022]
+  valid_years: [2023]
+  era5_channel_input: ['u10', 'v10', 't2m', 'sst', 'skt',   'lsm', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800', 't_600', 't_400',  'u_800', 'u_600', 'u_400', 'v_800', 'v_600', 'v_400']
+  era5_channel_output: ['avg_tprate']
+  region: 'us_midwest'
+  dt: 6 # time interval in hours
+  local_batch_size: 1
+  distributed: !!bool False
+  shuffle: !!bool False
+  batch_size: 1
+  num_data_workers: 0 #8
+  is_subset: !!bool False
+  step_start: -1
+  step_end: -1
+
+subset_test: &subset_test
+  <<: *base
+  train_years: [2020]
+  valid_years: [2023]
+  # Test subset functionality with a small sample
+  is_subset: !!bool True
+  step_start: 100    # Start at index 100
+  step_end: 120      # Use 20 samples for testing
+  local_batch_size: 2
+  num_data_workers: 0
+  era5_channel_input: ['u10', 'v10', 't2m']  # Use fewer channels for faster testing
+  era5_channel_output: ['avg_tprate']
+
+# T2M (Temperature) modeling configuration
+t2m_base: &t2m_base
+  <<: *base
+  # Data configuration for temperature modeling
+  era5_channel_input: ['u10', 'v10', 'z_1000', 'z_600', 'z_200', 'u_800', 'u_600', 'q_1000', 'q_800', 'q_600', 'lsm', 'clwc_800', 'clwc_600']  # 13 channels as per slides
+  era5_channel_output: ['t2m']  # Predict 2-meter temperature
+  
+  # Model configuration
+  model:
+    name: 't2mnet'  # Options: 't2mnet', 'simpleconv'
+    n_channels: 13  # Must match length of era5_channel_input
+    n_classes: 1    # Single output channel (t2m)
+    bilinear: !!bool True  # Use bilinear upsampling in U-Net
+  
+  # Training configuration
+  training:
+    epochs: 5 #50
+    learning_rate: 0.001
+    weight_decay: 1e-5
+    scheduler: 'cosine'  # Options: 'cosine', 'step', 'none'
+    patience: 10  # Early stopping patience
+    save_every: 5  # Save checkpoint every N epochs
+    
+  # Loss and optimization
+  loss:
+    type: 'mse'  # Mean Squared Error for regression
+    normalize_target: !!bool True  # Normalize temperature values
+    
+  # Data loading for training
+  local_batch_size: 4
+  num_data_workers: 4
+  shuffle: !!bool True
+  
+  # Paths and logging
+  log_dir: './logs'
+  results_dir: './results'
+
+  # Normalization configuration
+  normalization:
+    normalize_inputs: !!bool True
+    normalize_outputs: !!bool True
+    method: 'zscore'  # z-score normalization
+
+# Subset configuration for t2m testing
+t2m_subset: &t2m_subset
+  <<: *t2m_base
+  train_years: [2020]
+  valid_years: [2023]
+  is_subset: !!bool True
+  step_start: 100
+  step_end: 200  # Use 100 samples for testing
+  local_batch_size: 2
+  num_data_workers: 0
+  training:
+    epochs: 5  # Fewer epochs for testing
+    learning_rate: 0.001
+    weight_decay: 1e-5
+    scheduler: 'none'
+    patience: 5
+    save_every: 2
+
+# Full training configuration for t2m
+t2m_train: &t2m_train
+  <<: *t2m_base
+  local_batch_size: 8
+  num_data_workers: 8
+  training:
+    epochs: 100
+    learning_rate: 0.001
+    weight_decay: 1e-4
+    scheduler: 'cosine'
+    patience: 15
+    save_every: 10
