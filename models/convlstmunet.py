@@ -1,8 +1,9 @@
 """ConvLSTM cell and stacked ConvLSTM model for spatiotemporal land-use prediction.
 
-Reference:
+Reference(s):
     Shi et al. 2015, "Convolutional LSTM Network: A Machine Learning Approach for
     Precipitation Nowcasting", NeurIPS.
+    https://github.com/ShivekRanjan/bengaluru-lulc-forecast-/blob/main/src/models/convlstm.py
 
 The encoder ingests a sequence of multi-channel rasters (B, T, C, H, W) and the
 decoder head predicts a per-pixel class probability map for the next-year frame.
@@ -12,10 +13,43 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
-import torch                    # pyright: ignore[reportMissingImports]
-import torch.nn as nn           # pyright: ignore[reportMissingImports]
-import torch.nn.functional as F # pyright: ignore[reportMissingImports]
+import torch         
+import torch.nn as nn
+import torch.nn.functional as F
 
+class AttentionGate(nn.Module):
+    """Attention gate for skip connections (Oktay et al. 2018, Attention U-Net)."""
+    def __init__(self, gate_channels: int, skip_channels: int, inter_channels: int):
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(gate_channels, inter_channels, kernel_size=1, bias=True),
+            nn.BatchNorm2d(inter_channels),
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(skip_channels, inter_channels, kernel_size=1, bias=True),
+            nn.BatchNorm2d(inter_channels),
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(inter_channels, 1, kernel_size=1, bias=True),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid(),
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, gate: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            gate: decoder feature map (coarser scale), shape (B, gate_channels, H, W)
+            skip: encoder skip-connection feature map, shape (B, skip_channels, H, W)
+                  Must already match `gate`'s spatial size (interpolate before calling).
+        Returns:
+            skip, reweighted elementwise by a learned attention map (same shape as skip).
+        """
+        g1 = self.W_g(gate)
+        x1 = self.W_x(skip)
+        attn = self.relu(g1 + x1)
+        attn = self.psi(attn)  # (B, 1, H, W), values in [0, 1]
+        return skip * attn
 
 class ConvLSTMCell(nn.Module):
     """Single ConvLSTM cell with 4 gates fused ito a single convolution operation."""
@@ -73,7 +107,7 @@ class ConvLSTMCell(nn.Module):
 
         return h_current, c_current
 
-    def init_state(self, batch_size: int, height: int, width: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def init_state(self, batch_size: int, height: int, width: int, device: Optional[torch.device] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Initialize the hidden and cell states to zeros.
 
         Args:
@@ -87,7 +121,6 @@ class ConvLSTMCell(nn.Module):
             torch.zeros(batch_size, self.hidden_channels, height, width, device=self.conv.weight.device),
             torch.zeros(batch_size, self.hidden_channels, height, width, device=self.conv.weight.device)
         )
-
 
 class ConvLSTM(nn.Module):
     """Stacked ConvLSTM model for spatiotemporal land-use prediction."""
@@ -152,8 +185,10 @@ class UNetConvLSTM(nn.Module):
         hidden_channels: List[int],
         kernel_size: int = 3,
         bias: bool = True,
+        use_attention_gates: bool = False,
     ):
         super().__init__()
+        self.use_attention_gates = use_attention_gates
 
         # Spatial encoder (applied to each timestep independently)
         self.enc1 = self._conv_block(input_channels, hidden_channels[0], kernel_size, bias)     # 16 channels ; handles 52 x 90 spatial resolution
@@ -177,6 +212,17 @@ class UNetConvLSTM(nn.Module):
             kernel_size=1
         )
 
+        if self.use_attention_gates:
+            # gate=decoder signal at that scale, skip=encoder feature being gated
+            self.attn3 = AttentionGate(
+                gate_channels=hidden_channels[1], skip_channels=hidden_channels[1],
+                inter_channels=hidden_channels[1] // 2,
+            )
+            self.attn2 = AttentionGate(
+                gate_channels=hidden_channels[0], skip_channels=hidden_channels[0],
+                inter_channels=hidden_channels[0] // 2,
+            )
+
     @staticmethod
     def _conv_block(in_channels: int, out_channels: int, kernel_size: int = 3, bias: bool = True) -> nn.Sequential:
         """Creates a 2-layerconvolutional block with Conv2d, BatchNorm, and ReLU."""
@@ -195,14 +241,14 @@ class UNetConvLSTM(nn.Module):
         device = x.device
 
         # Initialize hidden states for ConvLSTM layers at bottleneck and first encoder layer
-        state1 = self.temporal1.init_state(B, H, W, device)
-        state2 = self.temporal2.init_state(B, H//4, W//4, device)
+        state1 = self.temporal1.init_state(batch_size=B, height=H, width=W, device=device)
+        state2 = self.temporal2.init_state(batch_size=B, height=H // 4, width=W // 4, device=device)  # Bottleneck is downsampled by factor of 4
 
         # Cache last hidden states (1 & 2) for skip connections
         e1_last = e2_last = None
         for t in range(T):
             e1 = self.enc1(x[:, t])            
-            state1 = self.temporal1(e1, state1) 
+            state1 = self.temporal1(e1, state1[0], state1[1]) 
             e1 = state1[0]
             e1_last = e1 # high-resolution feature map for skip connection
 
@@ -210,16 +256,20 @@ class UNetConvLSTM(nn.Module):
             e2_last = e2  # low-resolution feature map for skip connection
 
             e3 = self.enc3(self.pool(e2))
-            state2 = self.temporal2(e3, state2)
+            state2 = self.temporal2(e3, state2[0], state2[1])
             e3 = state2[0]
 
         h_t = state2[0]  # Last hidden state from the bottleneck ConvLSTM
         d3 = self.upconv3(h_t)
-        d3 = torch.cat([d3, e2_last], dim=1)  # Concatenate with skip connection from encoder
+        d3 = F.interpolate(d3, size=e2_last.shape[-2:], mode='nearest')
+        skip2 = self.attn3(gate=d3, skip=e2_last) if self.use_attention_gates else e2_last
+        d3 = torch.cat([d3, skip2], dim=1)
         d3 = self.dec3(d3)
 
         d2 = self.upconv2(d3)
-        d2 = torch.cat([d2, e1_last], dim=1)
+        d2 = F.interpolate(d2, size=e1_last.shape[-2:], mode='nearest')
+        skip1 = self.attn2(gate=d2, skip=e1_last) if self.use_attention_gates else e1_last
+        d2 = torch.cat([d2, skip1], dim=1)
         d2 = self.dec2(d2)
 
         d1 = self.head(d2)

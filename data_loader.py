@@ -17,8 +17,8 @@ import dask
 dask.config.set(scheduler='synchronous')
 
 # Constants
-DATA_ROOT = '/projects/standard/kumarv/shared/ai_for_earth_era5/datasets'
-
+DATA_ROOT = '/users/8/dani0883/ai4earth-era5-temp-group/era5_data'
+    
 def worker_init(wrk_id):
     """Initialize worker with a unique seed for data loading randomization"""
     np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
@@ -177,7 +177,7 @@ class UnifiedERA5Dataset(Dataset):
             
             # Open dataset with thread synchronizer
             synchronizer = zarr.ThreadSynchronizer()
-            ds = xr.open_zarr(file_path, consolidated=True, synchronizer=synchronizer)
+            ds = xr.open_zarr(file_path, consolidated=False, synchronizer=synchronizer)            
             datasets.append(ds)
         
         # Concatenate all datasets along the time dimension
