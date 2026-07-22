@@ -542,7 +542,7 @@ if __name__ == '__main__':
     print(f"Data loader initialized in {init_time:.2f} seconds")
     
     # Print dataset information
-    print_dataset_info(dataset, dataloader)
+    print_dataset_info(dataset, dataloader) # NOTE
     
     # Process input channels argument
     input_channels_to_show = None
