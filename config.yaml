@@ -1,7 +1,7 @@
 base: &base
   train_years: [2020,2021,2022]
   valid_years: [2023]
-  era5_channel_input: ['u10', 'v10', 't2m', 'sst', 'skt',   'lsm', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800', 't_600', 't_400',  'u_800', 'u_600', 'u_400', 'v_800', 'v_600', 'v_400']
+  era5_channel_input: ['u10', 'v10', 't2m', 'sst', 'skt', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'q_1000', 'q_800', 't_800', 't_600', 't_400',  'u_800', 'v_800']
   era5_channel_output: ['avg_tprate']
   region: 'us_midwest'
   dt: 6 # time interval in hours
@@ -14,6 +14,11 @@ base: &base
   step_start: -1
   step_end: -1
 
+t2m_all_channels: &t2m_all_channels
+  <<: *base
+  era5_channel_input: ['u10', 'v10', 'skt', 'lsm', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800', 't_600', 't_400', 'u_800', 'u_600', 'u_400', 'v_800', 'v_600', 'v_400']
+  era5_channel_output: ['t2m']
+
 subset_test: &subset_test
   <<: *base
   train_years: [2020]
@@ -23,7 +28,7 @@ subset_test: &subset_test
   step_start: 100    # Start at index 100
   step_end: 120      # Use 20 samples for testing
   local_batch_size: 2
-  num_data_workers: 0
+  num_data_workers: 4
   era5_channel_input: ['u10', 'v10', 't2m']  # Use fewer channels for faster testing
   era5_channel_output: ['avg_tprate']
 
@@ -31,7 +36,7 @@ subset_test: &subset_test
 t2m_base: &t2m_base
   <<: *base
   # Data configuration for temperature modeling
-  era5_channel_input: ['u10', 'v10', 'z_1000', 'z_600', 'z_200', 'u_800', 'u_600', 'q_1000', 'q_800', 'q_600', 'lsm', 'clwc_800', 'clwc_600']  # 13 channels as per slides
+  era5_channel_input: ['u10', 'v10', 'skt', 'lsm', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800',$] # 13 channels as per slides
   era5_channel_output: ['t2m']  # Predict 2-meter temperature
   
   # Model configuration
