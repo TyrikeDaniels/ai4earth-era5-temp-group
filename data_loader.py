@@ -55,6 +55,7 @@ def get_data_loader(params, train=True, shuffle=True):
         output_channels=params.era5_channel_output,
         region=getattr(params, 'region', 'us_midwest'),
         dt=getattr(params, 'dt', 6),  # Time interval in hours
+        seq_len=getattr(params, 'seq_len', 6)  # Number of input timesteps
     )
 
     # Create subset if needed
@@ -126,6 +127,7 @@ class UnifiedERA5Dataset(Dataset):
         output_channels: List[str],
         region: str = 'us_midwest',
         dt: int = 6,  # Time interval in hours
+        seq_len: int = 6  # Number of input timesteps
     ):
         """
         Initialize the dataset.
@@ -143,37 +145,96 @@ class UnifiedERA5Dataset(Dataset):
         self.region = region
         self.dt = dt
         self._load_datasets()
+        self.seq_len = seq_len
+
+        input_xr = (
+            self.data.data
+            .sel(channel=self.input_channels)
+        )
+
+        output_xr = (
+            self.data.data
+            .sel(channel=self.output_channels)
+        )
+
+        self.input_mean = (
+            input_xr
+            .mean(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+        self.input_std = (
+            input_xr
+            .std(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+        self.output_mean = (
+            output_xr
+            .mean(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+        self.output_std = (
+            output_xr
+            .std(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
 
     def __len__(self):
-        return len(self.data.time)
+        # Each sample needs seq_len input steps + 1 target step
+        return len(self.data.time) - self.seq_len
 
     def __getitem__(self, idx):
-        # Extract input and output data for selected channels at the given time index
-        input_data = self.data.data.sel(channel=self.input_channels).isel(time=idx).values
-        output_data = self.data.data.sel(channel=self.output_channels).isel(time=idx).values
-        
-        # Get timestamp
-        timestamp = self.data.time.isel(time=idx).values
-        
-        result = {
-            'input': torch.as_tensor(input_data, dtype=torch.float32), 
-            'output': torch.as_tensor(output_data, dtype=torch.float32), 
-            'timestamp': str(timestamp),
-            'global_idx': idx,
+
+        # Get sequence of input timesteps
+        input_data = (
+            self.data.data
+            .sel(channel=self.input_channels)
+            .isel(time=slice(idx, idx + self.seq_len))
+            .values
+        )
+        # shape: (seq_len, C, H, W)
+
+        # Get target timestep after sequence
+        output_data = (
+            self.data.data
+            .sel(channel=self.output_channels)
+            .isel(time=idx + self.seq_len)
+            .values
+        )
+        # shape: (C_out, H, W)
+
+        # Normalize
+        input_data = (
+            input_data - self.input_mean[None, :, None, None]
+        ) / self.input_std[None, :, None, None]
+
+        output_data = (
+            output_data - self.output_mean[:, None, None]
+        ) / self.output_std[:, None, None]
+
+        return {
+            "input": torch.from_numpy(input_data).float(),
+            "output": torch.from_numpy(output_data).float(),
+            "timestamp": str(self.data.time[idx + self.seq_len].values),
+            "global_idx": idx,
         }
         
-        return result
-    
     def _load_datasets(self):
         """Load all datasets and concatenate them along time dimension"""
-        print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
+        #print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
         
         datasets = []
         
         for year in self.years:
             # Construct file path for unified dataset
             file_path = f'{DATA_ROOT}/{self.region}/{year}_{self.region}_28.zarr'
-            print(f"Loading data for year {year} from: {file_path}")
+            #print(f"Loading data for year {year} from: {file_path}")
             
             # Open dataset with thread synchronizer
             synchronizer = zarr.ThreadSynchronizer()
@@ -181,7 +242,7 @@ class UnifiedERA5Dataset(Dataset):
             datasets.append(ds)
         
         # Concatenate all datasets along the time dimension
-        print("Concatenating datasets along time dimension...")
+        #print("Concatenating datasets along time dimension...")
         self.data = xr.concat(datasets, dim='time')
         
         # Store coordinate information
@@ -198,11 +259,11 @@ class UnifiedERA5Dataset(Dataset):
         if missing_output_channels:
             print(f"Warning: Missing output channels: {missing_output_channels}")
         
-        print(f"Available channels: {list(self.channels)}")
-        print(f"Requested input channels: {self.input_channels}")
-        print(f"Requested output channels: {self.output_channels}")
-        print(f"Spatial dimensions: lat={len(self.lat)}, lon={len(self.lon)}")
-        print(f"Dataset loading complete. Total samples: {len(self.data.time)}")
+        # print(f"Available channels: {list(self.channels)}")
+        # print(f"Requested input channels: {self.input_channels}")
+        # print(f"Requested output channels: {self.output_channels}")
+        # print(f"Spatial dimensions: lat={len(self.lat)}, lon={len(self.lon)}")
+        # print(f"Dataset loading complete. Total samples: {len(self.data.time)}")
 
 if __name__ == '__main__':
     """Test script for the simplified data loader

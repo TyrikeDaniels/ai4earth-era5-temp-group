@@ -261,13 +261,13 @@ class UNetConvLSTM(nn.Module):
 
         h_t = state2[0]  # Last hidden state from the bottleneck ConvLSTM
         d3 = self.upconv3(h_t)
-        d3 = F.interpolate(d3, size=e2_last.shape[-2:], mode='nearest')
+        d3 = F.interpolate(d3, size=e2_last.shape[-2:], mode='bilinear', align_corners=False)
         skip2 = self.attn3(gate=d3, skip=e2_last) if self.use_attention_gates else e2_last
         d3 = torch.cat([d3, skip2], dim=1)
         d3 = self.dec3(d3)
 
         d2 = self.upconv2(d3)
-        d2 = F.interpolate(d2, size=e1_last.shape[-2:], mode='nearest')
+        d2 = F.interpolate(d2, size=e1_last.shape[-2:], mode='bilinear', align_corners=False)
         skip1 = self.attn2(gate=d2, skip=e1_last) if self.use_attention_gates else e1_last
         d2 = torch.cat([d2, skip1], dim=1)
         d2 = self.dec2(d2)
