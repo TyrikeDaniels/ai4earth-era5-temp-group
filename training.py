@@ -196,6 +196,7 @@ def main():
     parser.add_argument("--lr", default=1e-3, type=float)
     parser.add_argument("--bilinear", action='store_true', help="Use bilinear upsampling instead of ConvTranspose2d")
     parser.add_argument("--checkpoint_dir", default='checkpoints', type=str)
+    parser.add_argument("--checkpoint", default=None, type=str, help="Specific checkpoint file to resume from")
     parser.add_argument("--resume", action='store_true', help="Resume training from the checkpoint")
     args = parser.parse_args()
 
@@ -224,7 +225,7 @@ def main():
     early_stopping = EarlyStopping(patience=args.patience, verbose=True)
 
     start_epoch = 1
-    checkpoint_path = os.path.join(args.checkpoint_dir, 'best_unet_model.pt')
+    checkpoint_path = args.checkpoint if args.checkpoint else os.path.join(args.checkpoint_dir, 'best_unet_model.pt')
 
     if args.resume and os.path.exists(checkpoint_path):
         print(f"Resuming from checkpoint: {checkpoint_path}")
@@ -236,7 +237,6 @@ def main():
         print(f"Resumed from epoch {checkpoint['epoch']}, val_loss={checkpoint['val_loss']:.6f}")
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(args.checkpoint_dir, 'best_unet_model.pt')
 
     history = {'train_loss': [], 'val_loss': [], 'val_rmse': [], 'best_epoch': 0}
 
