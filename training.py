@@ -196,6 +196,7 @@ def main():
     parser.add_argument("--lr", default=1e-3, type=float)
     parser.add_argument("--bilinear", action='store_true', help="Use bilinear upsampling instead of ConvTranspose2d")
     parser.add_argument("--checkpoint_dir", default='checkpoints', type=str)
+    parser.add_argument("--resume", action='store_true', help="Resume training from the checkpoint")
     args = parser.parse_args()
 
     params = YParams(args.yaml_config, args.config)
@@ -214,8 +215,6 @@ def main():
     in_channels = len(params.era5_channel_input)
     out_channels = len(params.era5_channel_output)
     print(f"Model: in_channels={in_channels}, out_channels={out_channels}, bilinear={args.bilinear}")
-
-    parser.add_argument("--resume", action='store_true', help="Resume training from the checkpoint")
 
     model = UNet(n_channels=in_channels, n_classes=out_channels, bilinear=args.bilinear).to(device)
     model.print_model_summary()
