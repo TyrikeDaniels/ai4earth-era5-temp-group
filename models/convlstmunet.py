@@ -176,7 +176,8 @@ class ConvLSTM(nn.Module):
         return torch.cat(outputs, dim=1)  # Concatenate along the time dimension
 
 class UNetConvLSTM(nn.Module):
-    """UNet architecture with ConvLSTM layers for spatiotemporal land-use prediction."""
+    """UNet architecture with ConvLSTMCell layers for spatiotemporal land-use prediction. 
+    NOTE: Assumed hidden is 16->32->32"""
 
     def __init__(
         self,
@@ -193,11 +194,12 @@ class UNetConvLSTM(nn.Module):
         # Spatial encoder (applied to each timestep independently)
         self.enc1 = self._conv_block(input_channels, hidden_channels[0], kernel_size, bias)     # 16 channels ; handles 52 x 90 spatial resolution
         self.enc2 = self._conv_block(hidden_channels[0], hidden_channels[1], kernel_size, bias) # 32 channels ; handles 26 x 45 spatial resolution
-        self.enc3 = self._conv_block(hidden_channels[1], hidden_channels[2], kernel_size, bias) # 64 channels ; handles 13 x 23 spatial resolution
+        self.enc3 = self._conv_block(hidden_channels[1], hidden_channels[2], kernel_size, bias) # 64 channels ; handles 13 x 22 spatial resolution
         self.pool = nn.MaxPool2d(2)
 
         # Temporal ConvLSTM encoder/bottleneck (applied across timesteps)
         self.temporal1 = ConvLSTMCell(hidden_channels[0], hidden_channels[0]) # Retain 16 channels
+        self.temporal_mid = ConvLSTMCell(hidden_channels[1], hidden_channels[1]) # Retain 32 channels
         self.temporal2 = ConvLSTMCell(hidden_channels[2], hidden_channels[2]) # Retain 64 channels (bottleneck)
 
         # Decoder (upsampling and concatenation with skip connections)
@@ -205,13 +207,19 @@ class UNetConvLSTM(nn.Module):
         self.dec3 = self._conv_block(hidden_channels[1] + hidden_channels[1], hidden_channels[1], kernel_size, bias)
         self.upconv2 = nn.ConvTranspose2d(hidden_channels[1], hidden_channels[0], kernel_size=2, stride=2)
         self.dec2 = self._conv_block(hidden_channels[0] + hidden_channels[0], hidden_channels[0], kernel_size, bias)
-
-        self.head = nn.Conv2d(
-            hidden_channels[0],
-            output_channels,
-            kernel_size=1
+        
+        self.rain_prob_head = nn.Sequential(
+            nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(hidden_channels[0], 1, kernel_size=1)
         )
-
+        self.intensity_head = nn.Sequential(
+            nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden_channels[0], 1, kernel_size=1)
+        )
+        
         if self.use_attention_gates:
             # gate=decoder signal at that scale, skip=encoder feature being gated
             self.attn3 = AttentionGate(
@@ -224,42 +232,44 @@ class UNetConvLSTM(nn.Module):
             )
 
     @staticmethod
-    def _conv_block(in_channels: int, out_channels: int, kernel_size: int = 3, bias: bool = True) -> nn.Sequential:
-        """Creates a 2-layerconvolutional block with Conv2d, BatchNorm, and ReLU."""
+    def _conv_block(in_channels: int, out_channels: int, kernel_size: int = 3, bias: bool = True, drop_p: float = 0.2) -> nn.Sequential:
         padding = kernel_size // 2
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding, bias=bias),
-            nn.BatchNorm2d(out_channels),
+            nn.GroupNorm(8, out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(drop_p),
             nn.Conv2d(out_channels, out_channels, kernel_size, padding=padding, bias=bias),
-            nn.BatchNorm2d(out_channels),
+            nn.GroupNorm(8, out_channels),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(drop_p),
         )
     
     def forward(self, x):
         B, T, C, H, W = x.shape
         device = x.device
 
-        # Initialize hidden states for ConvLSTM layers at bottleneck and first encoder layer
         state1 = self.temporal1.init_state(batch_size=B, height=H, width=W, device=device)
-        state2 = self.temporal2.init_state(batch_size=B, height=H // 4, width=W // 4, device=device)  # Bottleneck is downsampled by factor of 4
+        state2 = self.temporal_mid.init_state(batch_size=B, height=H // 2, width=W // 2, device=device)
+        state3 = self.temporal2.init_state(batch_size=B, height=H // 4, width=W // 4, device=device)
 
-        # Cache last hidden states (1 & 2) for skip connections
         e1_last = e2_last = None
         for t in range(T):
-            e1 = self.enc1(x[:, t])            
-            state1 = self.temporal1(e1, state1[0], state1[1]) 
+            e1 = self.enc1(x[:, t])
+            state1 = self.temporal1(e1, state1[0], state1[1])
             e1 = state1[0]
-            e1_last = e1 # high-resolution feature map for skip connection
+            e1_last = e1
 
-            e2 = self.enc2(self.pool(e1)) 
-            e2_last = e2  # low-resolution feature map for skip connection
+            e2 = self.enc2(self.pool(e1))
+            state2 = self.temporal_mid(e2, state2[0], state2[1])
+            e2 = state2[0]
+            e2_last = e2
 
             e3 = self.enc3(self.pool(e2))
-            state2 = self.temporal2(e3, state2[0], state2[1])
-            e3 = state2[0]
+            state3 = self.temporal2(e3, state3[0], state3[1])
+            e3 = state3[0]
 
-        h_t = state2[0]  # Last hidden state from the bottleneck ConvLSTM
+        h_t = state3[0]  # Last hidden state from the bottleneck ConvLSTM
         d3 = self.upconv3(h_t)
         d3 = F.interpolate(d3, size=e2_last.shape[-2:], mode='bilinear', align_corners=False)
         skip2 = self.attn3(gate=d3, skip=e2_last) if self.use_attention_gates else e2_last
@@ -272,6 +282,7 @@ class UNetConvLSTM(nn.Module):
         d2 = torch.cat([d2, skip1], dim=1)
         d2 = self.dec2(d2)
 
-        d1 = self.head(d2)
+        rain_logit = self.rain_prob_head(d2)
+        intensity_pred = self.intensity_head(d2)
         
-        return d1  # Return the final output tensor of shape (B, C_out, H, W)
+        return rain_logit, intensity_pred

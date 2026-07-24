@@ -58,6 +58,9 @@ def get_data_loader(params, train=True, shuffle=True):
         seq_len=getattr(params, 'seq_len', 6)  # Number of input timesteps
     )
 
+    # Cache raw data arrays before creating the DataLoader so workers can access them
+    cache_raw_dataset(dataset)
+       
     # Create subset if needed
     if getattr(params, 'is_subset', False):
         indices = np.arange(params.step_start, params.step_end)
@@ -80,6 +83,12 @@ def get_data_loader(params, train=True, shuffle=True):
     )
 
     return dataloader, dataset
+
+def cache_raw_dataset(dataset):
+    """Eagerly load the dataset's raw data once, in place. No normalization here —
+    that happens later, per-sample, in __getitem__."""
+    dataset.input_data_cached = dataset.data.data.sel(channel=dataset.input_channels).values
+    dataset.output_data_cached = dataset.data.data.sel(channel=dataset.output_channels).values
 
 class SubDataset(Subset):
     """
@@ -128,6 +137,7 @@ class UnifiedERA5Dataset(Dataset):
         region: str = 'us_midwest',
         dt: int = 6,  # Time interval in hours
         seq_len: int = 6  # Number of input timesteps
+
     ):
         """
         Initialize the dataset.
@@ -146,17 +156,11 @@ class UnifiedERA5Dataset(Dataset):
         self.dt = dt
         self._load_datasets()
         self.seq_len = seq_len
+        self.input_data_cached = None
+        self.output_data_chaced = None
 
-        input_xr = (
-            self.data.data
-            .sel(channel=self.input_channels)
-        )
-
-        output_xr = (
-            self.data.data
-            .sel(channel=self.output_channels)
-        )
-
+        input_xr = self.data.data.sel(channel=self.input_channels)
+        
         self.input_mean = (
             input_xr
             .mean(dim=["time", "latitude", "longitude"])
@@ -171,70 +175,51 @@ class UnifiedERA5Dataset(Dataset):
             .values
         )
 
+        output_xr = self.data.data.sel(channel=self.output_channels)
+        log_output_xr = np.log1p(output_xr)  # xarray dispatches np.log1p elementwise, this works fine
+
         self.output_mean = (
-            output_xr
+            log_output_xr
             .mean(dim=["time", "latitude", "longitude"])
             .compute()
             .values
         )
 
         self.output_std = (
-            output_xr
+            log_output_xr
             .std(dim=["time", "latitude", "longitude"])
             .compute()
             .values
         )
 
     def __len__(self):
-        # Each sample needs seq_len input steps + 1 target step
         return len(self.data.time) - self.seq_len
 
     def __getitem__(self, idx):
+        x_raw = self.input_data_cached[idx: idx + self.seq_len]     # raw input channels, shape (T, C_in, H, W)
+        y_raw = self.output_data_cached[idx + self.seq_len]         # raw precip, shape (C_out, H, W)
 
-        # Get sequence of input timesteps
-        input_data = (
-            self.data.data
-            .sel(channel=self.input_channels)
-            .isel(time=slice(idx, idx + self.seq_len))
-            .values
-        )
-        # shape: (seq_len, C, H, W)
+        x_norm = (x_raw - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # Get target timestep after sequence
-        output_data = (
-            self.data.data
-            .sel(channel=self.output_channels)
-            .isel(time=idx + self.seq_len)
-            .values
-        )
-        # shape: (C_out, H, W)
-
-        # Normalize
-        input_data = (
-            input_data - self.input_mean[None, :, None, None]
-        ) / self.input_std[None, :, None, None]
-
-        output_data = (
-            output_data - self.output_mean[:, None, None]
-        ) / self.output_std[:, None, None]
+        log_y = np.log1p(y_raw)
+        log_y_norm = (log_y - self.output_mean[:, None, None]) / self.output_std[:, None, None]
 
         return {
-            "input": torch.from_numpy(input_data).float(),
-            "output": torch.from_numpy(output_data).float(),
-            "timestamp": str(self.data.time[idx + self.seq_len].values),
-            "global_idx": idx,
+            "input": torch.from_numpy(x_norm).float(),
+            "output_raw": torch.from_numpy(y_raw).float(),        # for building rain_mask_true
+            "output_log_norm": torch.from_numpy(log_y_norm).float(),  # for the regression loss
         }
         
     def _load_datasets(self):
         """Load all datasets and concatenate them along time dimension"""
-        #print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
+        # print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
         
         datasets = []
         
         for year in self.years:
             # Construct file path for unified dataset
             file_path = f'{DATA_ROOT}/{self.region}/{year}_{self.region}_28.zarr'
-            #print(f"Loading data for year {year} from: {file_path}")
+            # print(f"Loading data for year {year} from: {file_path}")
             
             # Open dataset with thread synchronizer
             synchronizer = zarr.ThreadSynchronizer()
@@ -242,7 +227,7 @@ class UnifiedERA5Dataset(Dataset):
             datasets.append(ds)
         
         # Concatenate all datasets along the time dimension
-        #print("Concatenating datasets along time dimension...")
+        # print("Concatenating datasets along time dimension...")
         self.data = xr.concat(datasets, dim='time')
         
         # Store coordinate information

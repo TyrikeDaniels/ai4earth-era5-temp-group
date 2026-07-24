@@ -1,5 +1,5 @@
 """
-Dummy ERA5 data loader for testing your ConvLSTM-U-Net pipeline WITHOUT MSI access.
+Dummy ERA5 data loader for testing your ConvLSTM-U-Net pipeline WITHOUT MSI access. No normalization.
 
 Mimics the interface of UnifiedERA5Dataset / get_data_loader from data_loader.py,
 but generates random synthetic data matching your real config:
@@ -75,7 +75,6 @@ class DummyERA5Dataset(Dataset):
             "timestamp": f"dummy_{idx}",
             "global_idx": idx,
         }
-
 
 def get_dummy_data_loader(batch_size=4, num_samples=200, seq_len=6, num_workers=0, **kwargs):
     dataset = DummyERA5Dataset(num_samples=num_samples, seq_len=seq_len, **kwargs)

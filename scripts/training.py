@@ -1,6 +1,3 @@
-import argparse
-import time
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -9,117 +6,201 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.YParams import YParams
+from utils.training_utils import compute_loss, load_params
 
 from models.convlstmunet import UNetConvLSTM  
-#from models.weighted_mse_loss import WeightedMSELoss  
-from data_loader import get_data_loader  # adjust class name to match yours
+from data_loader import get_data_loader 
+
+CHECKPOINT_DIR = "./models/checkpoints"
+CHECKPOINT_PATH = os.path.join(CHECKPOINT_DIR, "best_model.pt")
+
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+    lam: float = 1.0,
+) -> dict:
+    """Run the model over a validation set with no gradient updates."""
+    model.eval()
+
+    n_batches = 0
+    total_loss = total_bce = total_mse = 0.0
+    total_tp = total_fp = total_fn = 0.0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            x = batch["input"].to(device)
+            y = batch["output_log_norm"].to(device)
+            y_raw = batch["output_raw"].to(device)
+
+            rain_logit, intensity_pred = model(x)
+            loss, bce_loss, mse_loss, tp, fp, fn = compute_loss(
+                rain_logit=rain_logit,
+                intensity_pred=intensity_pred,
+                precip_raw=y_raw,
+                log_precip_norm=y,
+                device=device,
+                lam=lam,
+            )
+
+            total_loss += loss.item()
+            total_bce += bce_loss.item()
+            total_mse += mse_loss.item()
+            total_tp += tp.item()
+            total_fp += fp.item()
+            total_fn += fn.item()
+            n_batches += 1
+
+    model.train()  # switch back before returning to the training loop
+
+    avg_loss = total_loss / n_batches
+    avg_bce = total_bce / n_batches
+    avg_mse = total_mse / n_batches
+    precision = total_tp / (total_tp + total_fp + 1e-6)
+    recall = total_tp / (total_tp + total_fn + 1e-6)
+    f1 = 2 * precision * recall / (precision + recall + 1e-6)
+
+    return {
+        "loss": avg_loss, "bce": avg_bce, "mse": avg_mse,
+        "precision": precision, "recall": recall, "f1": f1,
+    }
 
 def train(
     model: nn.Module,
-    criterion: nn.Module,
-    scheduler: torch.optim.lr_scheduler,
     dataloader: DataLoader,
+    valid_dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    epochs: int = 50
-    ):
-        
-    for epoch in range(epochs):
-        epoch_loss = 0.0
+    scheduler=None,
+    epochs: int = 50,
+):
+    best_val_loss = float("inf")
+    start_epoch = 0
+
+    # --- resume from checkpoint if one exists ---
+    if os.path.exists(CHECKPOINT_PATH):
+        print(f"Found checkpoint at {CHECKPOINT_PATH}, resuming...")
+        checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+        start_epoch = checkpoint["epoch"] + 1
+        print(f"Resumed at epoch {start_epoch}, best_val_loss so far: {best_val_loss:.4f}")
+
+    for epoch in range(start_epoch, epochs):
         n_batches = 0
+        epoch_loss = epoch_bce = epoch_mse = 0.0
+        epoch_tp = epoch_fp = epoch_fn = 0.0
+
         for batch in dataloader:
-            features = batch["input"].to(device)
-            target = batch["output"].to(device)
-            pred = model(features)
-            loss = criterion(pred, target)
+            x = batch["input"].to(device)
+            y = batch["output_log_norm"].to(device)
+            y_raw = batch["output_raw"].to(device)
+
+            optimizer.zero_grad()
+            rain_logit, intensity_pred = model(x)
+            loss, bce_loss, mse_loss, tp, fp, fn = compute_loss(
+                rain_logit=rain_logit,
+                intensity_pred=intensity_pred,
+                precip_raw=y_raw,
+                log_precip_norm=y,
+                device=device,
+            )
             loss.backward()
             optimizer.step()
-            scheduler.step()
+            if scheduler: scheduler.step()
 
             epoch_loss += loss.item()
+            epoch_bce += bce_loss.item()
+            epoch_mse += mse_loss.item()
+            epoch_tp += tp.item()
+            epoch_fp += fp.item()
+            epoch_fn += fn.item()
             n_batches += 1
 
         avg_loss = epoch_loss / n_batches
-        print(f"epoch {epoch:02d} | avg loss {avg_loss:.4f}")
+        avg_bce = epoch_bce / n_batches
+        avg_mse = epoch_mse / n_batches
+        precision = epoch_tp / (epoch_tp + epoch_fp + 1e-6)
+        recall = epoch_tp / (epoch_tp + epoch_fn + 1e-6)
+        f1 = 2 * precision * recall / (precision + recall + 1e-6)
 
-def simple_visualization(dataloader: DataLoader, dataset: object):
-        
-    sample_batch = next(iter(dataloader))
-    input_data = sample_batch['input']
-    output_data = sample_batch['output']
-    
-    print(f"\nData shapes:")
-    print(f"  Input: {input_data.shape}")  # [batch, channels, lat, lon]
-    print(f"  Output: {output_data.shape}") # [batch, channels, lat, lon]
-    
-    print(f"\nCoordinate information:")
-    print(f"  Latitude range: {dataset.lat.min():.2f} to {dataset.lat.max():.2f}")
-    print(f"  Longitude range: {dataset.lon.min():.2f} to {dataset.lon.max():.2f}")
-    print(f"  Spatial dimensions: {len(dataset.lat)} x {len(dataset.lon)}")
-    
-    print(f"\nAvailable channels:")
-    print(f"  Input channels ({len(dataset.input_channels)}): {dataset.input_channels}")
-    print(f"  Output channels ({len(dataset.output_channels)}): {dataset.output_channels}")
-    
-    print(f"\nTime information:")
-    print(f"  First timestamp: {sample_batch['timestamp'][0]}")
-    print(f"  Years covered: {dataset.years}")
-    print("==========================================\n")
+        # --- validation pass ---
+        val_metrics = evaluate(model, valid_dataloader, device)
+
+        # --- checkpoint on best VAL loss, not train loss ---
+        if val_metrics["loss"] < best_val_loss:
+            best_val_loss = val_metrics["loss"]
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                },
+                CHECKPOINT_PATH,
+            )
+
+        print(
+            f"epoch {epoch:02d} | "
+            f"train loss {avg_loss:.4f} bce {avg_bce:.4f} mse {avg_mse:.4f} "
+            f"p {precision:.4f} r {recall:.4f} f1 {f1:.4f} | "
+            f"val loss {val_metrics['loss']:.4f} bce {val_metrics['bce']:.4f} "
+            f"mse {val_metrics['mse']:.4f} p {val_metrics['precision']:.4f} "
+            f"r {val_metrics['recall']:.4f} f1 {val_metrics['f1']:.4f}"
+        )
+
+    return best_val_loss
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Model ERA5 (2020-23) data using the data loader.")
-    parser.add_argument("--yaml_config", default='config.yaml', type=str, help="Path to YAML config file")
-    parser.add_argument("--config", default='base', type=str, help="Configuration name to use")
-    parser.add_argument("--train", action="store_true", help="Flag to indicate training mode.")
-    args = parser.parse_args()
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    # Load configuration and create data loader
-    print("Loading configuration and creating data loader...")
-    params = YParams(args.yaml_config, args.config)
+    params = load_params(device)
 
-    # Define input channels for the model
-    input_channels = [
-        "u10", "v10", "skt", "lsm",
-        "avg_tprate", "z_1000", "z_600", "z_200",
-        "clwc_800", "clwc_600", "clwc_400",
-        "ciwc_800", "ciwc_600", "ciwc_400",
-        "q_1000", "q_800", "q_600",
-        "t_800", "t_600", "t_400",
-        "u_800", "u_600", "u_400",
-        "v_800", "v_600", "v_400"
-    ]
+    train_dataloader, train_dataset = get_data_loader(params, train=True, shuffle=True)
+    valid_dataloader, valid_dataset = get_data_loader(params, train=False, shuffle=False)
+
+    model = UNetConvLSTM(
+        input_channels=len(params.era5_channel_input),
+        hidden_channels=[64, 128, 256],
+        output_channels=1,
+        use_attention_gates=True,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    warmup_epochs = 5
+    total_epochs = 100
+
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=0.1,   # start at 10% of base LR
+        end_factor=1.0,     # ramp up to full base LR
+        total_iters=warmup_epochs,
+    )
     
-    # Set parameters for visualization
-    params.local_batch_size = 5
-    params.num_data_workers = 8
-    params.shuffle = False
-    params.train = True
-    params.era5_channel_input = input_channels
-    params.era5_channel_output = ["t2m"]  # Only predict t2m
-    params.region = "us_midwest"  # Set the region to 'us_midwest'
-    params.train_years = [2020, 2021, 2022]  # Use years 2020-2023 for training
-    params.seq_len = 6  # Number of input timesteps
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_epochs - warmup_epochs,
+    )
 
-    start_time = time.time()
-    dataloader, dataset = get_data_loader(params, train=True, shuffle=False)
-    init_time = time.time() - start_time
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs],
+    )
 
-    print(f"Data loader initialized in {init_time:.2f} seconds")
-
-    #simple_visualization(dataloader, dataset)
-
-    model = UNetConvLSTM(input_channels=len(input_channels), hidden_channels=[16, 32, 64], output_channels=1, use_attention_gates=True).to(device)
-    #criterion = WeightedMSELoss()
-    criterion = nn.MSELoss()  # Use standard MSE loss for simplicity
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
-
-    train(model, criterion, scheduler, dataloader, optimizer, device, 60)  # Train for 60 epochs
+    train(
+        model=model,
+        dataloader=train_dataloader,
+        valid_dataloader=valid_dataloader,
+        optimizer=optimizer,
+        device=device,
+        scheduler=scheduler,
+        epochs=total_epochs,
+    )
 
 if __name__ == "__main__":
     # For testing purposes, we can call main() directly
