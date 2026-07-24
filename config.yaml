@@ -19,6 +19,12 @@ t2m_all_channels: &t2m_all_channels
   era5_channel_input: ['u10', 'v10', 'skt', 'lsm', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800', 't_600', 't_400', 'u_800', 'u_600', 'u_400', 'v_800', 'v_600', 'v_400']
   era5_channel_output: ['t2m']
 
+avg_tprate: &avg_tprate
+  <<: *base
+  era5_channel_input: ['u10', 'v10', 'z_1000', 'z_600', 'z_200', 'clwc_800', 'clwc_600', 'clwc_400', 'ciwc_800', 'ciwc_600', 'ciwc_400', 'q_1000', 'q_800', 'q_600', 't_800', 't_600', 't_400', 'u_800', 'v_800', 'u_600', 'v_600']
+  era5_channel_output: ['avg_tprate']
+
+
 subset_test: &subset_test
   <<: *base
   train_years: [2020]
