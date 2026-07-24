@@ -215,12 +215,26 @@ def main():
     out_channels = len(params.era5_channel_output)
     print(f"Model: in_channels={in_channels}, out_channels={out_channels}, bilinear={args.bilinear}")
 
+    parser.add_argument("--resume", action='store_true', help="Resume training from the checkpoint")
+
     model = UNet(n_channels=in_channels, n_classes=out_channels, bilinear=args.bilinear).to(device)
     model.print_model_summary()
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     early_stopping = EarlyStopping(patience=args.patience, verbose=True)
+
+    start_epoch = 1
+    checkpoint_path = os.path.join(args.checkpoint_dir, 'best_unet_model.pt')
+
+    if args.resume and os.path.exists(checkpoint_path):
+        print(f"Resuming from checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        early_stopping.best_loss = checkpoint['val_loss']
+        print(f"Resumed from epoch {checkpoint['epoch']}, val_loss={checkpoint['val_loss']:.6f}")
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(args.checkpoint_dir, 'best_unet_model.pt')
@@ -230,7 +244,7 @@ def main():
     print(f"\nStarting training for up to {args.epochs} epochs (patience={args.patience})...")
     print("=" * 60)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         start = time.time()
 
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
