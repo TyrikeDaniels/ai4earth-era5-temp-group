@@ -55,7 +55,7 @@ def get_data_loader(params, train=True, shuffle=True):
         output_channels=params.era5_channel_output,
         region=getattr(params, 'region', 'us_midwest'),
         dt=getattr(params, 'dt', 6),  # Time interval in hours
-        seq_len=getattr(params, 'seq_len', 6)  # Number of input timesteps
+        seq_len=getattr(params, 'seq_len', 6),  # Number of input timesteps
     )
 
     # Cache raw data arrays before creating the DataLoader so workers can access them
@@ -136,18 +136,18 @@ class UnifiedERA5Dataset(Dataset):
         output_channels: List[str],
         region: str = 'us_midwest',
         dt: int = 6,  # Time interval in hours
-        seq_len: int = 6  # Number of input timesteps
-
+        seq_len: int = 6,  # Number of input timesteps
     ):
         """
         Initialize the dataset.
         
         Args:
-            years: List of years to load data from
-            input_channels: List of ERA5 input channels to use
-            output_channels: List of ERA5 output channels to use
-            region: Region to load data for (e.g., 'us_midwest')
-            dt: Time interval in hours
+            years (List[int]): Years to load data from.
+            input_channels (List[str]): ERA5 input channel names to use.
+            output_channels (List[str]): ERA5 output channel names to use.
+            region (str): Region identifier to load data for (e.g., 'us_midwest').
+            dt (int): Time interval between timesteps, in hours.
+            seq_len (int): Number of input timesteps in each sample.
         """
         self.years = sorted(years)
         self.input_channels = input_channels
@@ -175,8 +175,9 @@ class UnifiedERA5Dataset(Dataset):
             .values
         )
 
-        output_xr = self.data.data.sel(channel=self.output_channels)
-        log_output_xr = np.log1p(output_xr)  # xarray dispatches np.log1p elementwise, this works fine
+
+        output_xr = self.data.data.sel(channel=self.output_channels) * 1000.0 # meters -> millimeters
+        log_output_xr = np.log1p(output_xr)                                   # xarray dispatches np.log1p elementwise (?)
 
         self.output_mean = (
             log_output_xr
@@ -196,18 +197,19 @@ class UnifiedERA5Dataset(Dataset):
         return len(self.data.time) - self.seq_len
 
     def __getitem__(self, idx):
-        x_raw = self.input_data_cached[idx: idx + self.seq_len]     # raw input channels, shape (T, C_in, H, W)
-        y_raw = self.output_data_cached[idx + self.seq_len]         # raw precip, shape (C_out, H, W)
+        x_raw = self.input_data_cached[idx: idx + self.seq_len]
+        y_raw_m = self.output_data_cached[idx + self.seq_len]
+        y_raw = y_raw_m * 1000.0
 
         x_norm = (x_raw - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         log_y = np.log1p(y_raw)
         log_y_norm = (log_y - self.output_mean[:, None, None]) / self.output_std[:, None, None]
-
+        
         return {
             "input": torch.from_numpy(x_norm).float(),
-            "output_raw": torch.from_numpy(y_raw).float(),        # for building rain_mask_true
-            "output_log_norm": torch.from_numpy(log_y_norm).float(),  # for the regression loss
+            "output_raw": torch.from_numpy(y_raw).float(),
+            "output_log_norm": torch.from_numpy(log_y_norm).float(),
         }
         
     def _load_datasets(self):

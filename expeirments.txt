@@ -1,0 +1,31 @@
+Benchmark training/validation results
+
+T-Unet (TrajGRU Unet)
+
+dt = 1:
+
+
+dt = 2:
+
+
+dt = 3:
+
+
+dt = 4:
+
+
+L-Unet (ConvLSTM Unet)
+
+dt = 1:
+
+
+dt = 2:
+
+
+dt = 3:
+
+
+dt = 4:
+
+
+
