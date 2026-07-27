@@ -222,8 +222,24 @@ class UnifiedERA5Dataset(Dataset):
             ds = xr.open_zarr(file_path, consolidated=False, synchronizer=synchronizer)
             datasets.append(ds)
 
+     def _add_moisture_proxy_channel(self):
+    """Compute a simple column-moisture proxy and add it as a new channel."""
+        print("Computing moisture proxy channel...")
+        q_1000 = self.data.data.sel(channel='q_1000')
+        q_800 = self.data.data.sel(channel='q_800')
+        q_600 = self.data.data.sel(channel='q_600')
+
+        moisture_proxy = (q_1000 + q_800 + q_600) / 3.0
+        moisture_proxy = moisture_proxy.expand_dims(channel=['moisture_proxy'])
+
+        self.data['data'] = xr.concat([self.data.data, moisture_proxy], dim='channel')
+
         print("Concatenating datasets along time dimension...")
         self.data = xr.concat(datasets, dim='time')
+
+        # NEW: add derived moisture proxy channel if requested
+        if 'moisture_proxy' in self.input_channels or 'moisture_proxy' in self.output_channels:
+            self._add_moisture_proxy_channel()
 
         self.lat = self.data.latitude.values.copy()
         self.lon = self.data.longitude.values.copy()
