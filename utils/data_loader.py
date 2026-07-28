@@ -199,7 +199,7 @@ class UnifiedERA5Dataset(Dataset):
     def __getitem__(self, idx):
         x_raw = self.input_data_cached[idx: idx + self.seq_len]
         y_raw_m = self.output_data_cached[idx + self.seq_len]
-        y_raw = y_raw_m * 1000.0
+        y_raw = y_raw_m * 3600.0
 
         x_norm = (x_raw - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 

@@ -143,43 +143,43 @@ def main():
         train_dataloader, _ = get_data_loader(params, train=True, shuffle=True)
         valid_dataloader, _ = get_data_loader(params, train=False, shuffle=False)
 
-    model = UNetConvLSTM(
-        input_channels=len(params.era5_channel_input),
-        hidden_channels=[16, 32, 64],
-        output_channels=1,
-        use_attention_gates=False,
-    ).to(device)
+        model = UNetConvLSTM(
+            input_channels=len(params.era5_channel_input),
+            hidden_channels=[16, 32, 64],
+            output_channels=1,
+            use_attention_gates=False,
+        ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4) # 1e-4, before
-    warmup_epochs = 2
-    total_epochs = 30
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4) # 1e-4, before
+        warmup_epochs = 2
+        total_epochs = 30
 
-    warmup = torch.optim.lr_scheduler.LinearLR(optimizer,
-        start_factor=0.1,   # start at 10% of base LR
-        end_factor=1.0,     # ramp up to full base LR
-        total_iters=warmup_epochs,
-    )
-    
-    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=total_epochs - warmup_epochs,
-    )
+        warmup = torch.optim.lr_scheduler.LinearLR(optimizer,
+            start_factor=0.1,   # start at 10% of base LR
+            end_factor=1.0,     # ramp up to full base LR
+            total_iters=warmup_epochs,
+        )
+        
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=total_epochs - warmup_epochs,
+        )
 
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup, cosine],
-        milestones=[warmup_epochs],
-    )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup, cosine],
+            milestones=[warmup_epochs],
+        )
 
-    train(
-        model=model,
-        dataloader=train_dataloader,
-        valid_dataloader=valid_dataloader,
-        optimizer=optimizer,
-        device=device,
-        scheduler=scheduler,
-        epochs=total_epochs,
-    )
+        train(
+            model=model,
+            dataloader=train_dataloader,
+            valid_dataloader=valid_dataloader,
+            optimizer=optimizer,
+            device=device,
+            scheduler=scheduler,
+            epochs=total_epochs,
+        )
 
 if __name__ == "__main__":
     main()
