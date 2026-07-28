@@ -24,7 +24,7 @@ import re
 from datetime import datetime
 
 # Import our data loader
-from data_loader import get_data_loader
+from utils.data_loader import get_data_loader
 from utils.YParams import YParams
 
 # Constants

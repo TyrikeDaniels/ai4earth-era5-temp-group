@@ -176,7 +176,7 @@ class UnifiedERA5Dataset(Dataset):
         )
 
 
-        output_xr = self.data.data.sel(channel=self.output_channels) * 1000.0 # meters -> millimeters
+        output_xr = self.data.data.sel(channel=self.output_channels) * 3600.0 # meters -> millimeters
         log_output_xr = np.log1p(output_xr)                                   # xarray dispatches np.log1p elementwise (?)
 
         self.output_mean = (

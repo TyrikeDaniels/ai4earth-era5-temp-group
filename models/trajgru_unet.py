@@ -241,58 +241,35 @@ class TrajGRU(nn.Module):
         )
 
         return next_h
- 
+
+
 class AttentionGate(nn.Module):
-    """Attention gate for skip connections (Oktay et al. 2018, Attention U-Net)."""
- 
+    """
+    Standard additive attention gate (Attention U-Net style).
+    gate:  the coarser, upsampled decoder feature map
+    skip:  the encoder feature map at the same resolution
+    Returns the skip connection re-weighted by a learned spatial attention mask.
+    """
+
     def __init__(self, gate_channels: int, skip_channels: int, inter_channels: int):
         super().__init__()
-        self.W_g = nn.Sequential(
-            nn.Conv2d(gate_channels, inter_channels, kernel_size=1, bias=True),
-            nn.BatchNorm2d(inter_channels),
-        )
-        self.W_x = nn.Sequential(
-            nn.Conv2d(skip_channels, inter_channels, kernel_size=1, bias=True),
-            nn.BatchNorm2d(inter_channels),
-        )
-        self.psi = nn.Sequential(
-            nn.Conv2d(inter_channels, 1, kernel_size=1, bias=True),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid(),
-        )
-        self.relu = nn.ReLU(inplace=True)
- 
+        self.theta = nn.Conv2d(gate_channels, inter_channels, kernel_size=1)
+        self.phi = nn.Conv2d(skip_channels, inter_channels, kernel_size=1)
+        self.psi = nn.Conv2d(inter_channels, 1, kernel_size=1)
+
     def forward(self, gate: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            gate: decoder feature map (coarser scale), shape (B, gate_channels, H, W)
-            skip: encoder skip-connection feature map, shape (B, skip_channels, H, W)
-                  Must already match `gate`'s spatial size (interpolate before calling).
-        """
-        g1 = self.W_g(gate)
-        x1 = self.W_x(skip)
-        attn = self.relu(g1 + x1)
-        attn = self.psi(attn)  # (B, 1, H, W), values in [0, 1]
+        g = self.theta(gate)
+        s = self.phi(skip)
+        combined = F.relu(g + s, inplace=True)
+        attn = torch.sigmoid(self.psi(combined))
         return skip * attn
- 
- 
+
+
 class UNetTrajGRU(nn.Module):
     """
     UNet architecture with TrajGRU layers for spatiotemporal precipitation prediction.
-    NOTE: Assumes hidden structure is 16->32->64.
- 
-    Mirrors UNetConvLSTM's forward()-time state initialization pattern exactly:
-    batch size, spatial resolution, and device are all read from the live input
-    tensor `x` inside forward(), not fixed at construction time. This means the
-    module tolerates uneven final batches and doesn't require input_hw to be
-    known in advance. (53x97 input works fine here without padding, since state
-    size is derived from the encoder feature maps at whatever resolution they
-    actually are, not asserted in advance.)
- 
-    Outputs (rain_logit, intensity_pred) to match compute_loss_a and stay directly
-    comparable to the ConvLSTM baseline (UNetConvLSTM).
     """
- 
+
     def __init__(
         self,
         input_channels: int,
@@ -300,63 +277,63 @@ class UNetTrajGRU(nn.Module):
         hidden_channels: List[int],
         kernel_size: int = 3,
         bias: bool = True,
-        use_attention_gates: bool = False,
         trajgru_L: int = 5,
         trajgru_zoneout: float = 0.0,
+        use_attention_gates: bool = False,
     ):
         super().__init__()
         self.use_attention_gates = use_attention_gates
- 
+
         # Spatial encoder (applied to each timestep independently)
         self.enc1 = self._conv_block(input_channels, hidden_channels[0], kernel_size, bias)
         self.enc2 = self._conv_block(hidden_channels[0], hidden_channels[1], kernel_size, bias)
         self.enc3 = self._conv_block(hidden_channels[1], hidden_channels[2], kernel_size, bias)
- 
+
         self.pool = nn.MaxPool2d(2)
- 
-        # Temporal TrajGRU encoder/bottleneck (applied across timesteps).
-        # No b_h_w here -- state shape is derived per forward() call, same
-        # pattern as ConvLSTMCell in UNetConvLSTM.
+
+        # Temporal TrajGRU encoder/bottleneck (applied across timesteps)
         self.temporal1 = TrajGRU(hidden_channels[0], hidden_channels[0], L=trajgru_L, zoneout=trajgru_zoneout)
         self.temporal2 = TrajGRU(hidden_channels[1], hidden_channels[1], L=trajgru_L, zoneout=trajgru_zoneout)
         self.temporal3 = TrajGRU(hidden_channels[2], hidden_channels[2], L=trajgru_L, zoneout=trajgru_zoneout)
- 
-        # Decoder (upsampling and concatenation with skip connections)
-        self.upconv3 = nn.ConvTranspose2d(hidden_channels[2], hidden_channels[1], kernel_size=2, stride=2)
-        self.dec3 = self._conv_block(hidden_channels[1] + hidden_channels[1], hidden_channels[1], kernel_size, bias)
-        self.upconv2 = nn.ConvTranspose2d(hidden_channels[1], hidden_channels[0], kernel_size=2, stride=2)
-        self.dec2 = self._conv_block(hidden_channels[0] + hidden_channels[0], hidden_channels[0], kernel_size, bias)
- 
-        # Two heads, matching UNetConvLSTM / compute_loss_a exactly:
-        # rain_logit (binary detection) + intensity_pred (regression).
+
+        # Decoder branches: one for probability output, one for intensity output.
+        self.upconv3_a = nn.ConvTranspose2d(hidden_channels[2], hidden_channels[1], kernel_size=2, stride=2)
+        self.dec3_a = self._conv_block(hidden_channels[1] + hidden_channels[1], hidden_channels[1], kernel_size, bias)
+        self.upconv2_a = nn.ConvTranspose2d(hidden_channels[1], hidden_channels[0], kernel_size=2, stride=2)
+        self.dec2_a = self._conv_block(hidden_channels[0] + hidden_channels[0], hidden_channels[0], kernel_size, bias)
+
+        self.upconv3_b = nn.ConvTranspose2d(hidden_channels[2], hidden_channels[1], kernel_size=2, stride=2)
+        self.dec3_b = self._conv_block(hidden_channels[1] + hidden_channels[1], hidden_channels[1], kernel_size, bias)
+        self.upconv2_b = nn.ConvTranspose2d(hidden_channels[1], hidden_channels[0], kernel_size=2, stride=2)
+        self.dec2_b = self._conv_block(hidden_channels[0] + hidden_channels[0], hidden_channels[0], kernel_size, bias)
+
+        # Attention gates: only created if actually requested. One pair per
+        # decoder branch, matched to the channel counts at each skip level.
+        if use_attention_gates:
+            self.attn3_a = AttentionGate(hidden_channels[1], hidden_channels[1], hidden_channels[1] // 2)
+            self.attn2_a = AttentionGate(hidden_channels[0], hidden_channels[0], hidden_channels[0] // 2)
+            self.attn3_b = AttentionGate(hidden_channels[1], hidden_channels[1], hidden_channels[1] // 2)
+            self.attn2_b = AttentionGate(hidden_channels[0], hidden_channels[0], hidden_channels[0] // 2)
+        else:
+            self.attn3_a = self.attn2_a = self.attn3_b = self.attn2_b = None
+
         self.prob_head = nn.Sequential(
             nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=3, padding=1),
-            nn.Dropout(0.25),
             nn.GroupNorm(8, hidden_channels[0]),
             nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels[0], out_channels=output_channels, kernel_size=1),
+            nn.Conv2d(hidden_channels[0], output_channels, kernel_size=1),
         )
- 
+
         self.intensity_head = nn.Sequential(
-            nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=3, padding=1),
-            nn.Dropout(0.25),
+            nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=1),
             nn.GroupNorm(8, hidden_channels[0]),
             nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_channels[0], out_channels=output_channels, kernel_size=1),
+            nn.Conv2d(hidden_channels[0], output_channels, kernel_size=1),
         )
- 
-        if self.use_attention_gates:
-            self.attn3 = AttentionGate(
-                gate_channels=hidden_channels[1], skip_channels=hidden_channels[1],
-                inter_channels=hidden_channels[1] // 2,
-            )
-            self.attn2 = AttentionGate(
-                gate_channels=hidden_channels[0], skip_channels=hidden_channels[0],
-                inter_channels=hidden_channels[0] // 2,
-            )
- 
+
+
     @staticmethod
-    def _conv_block(in_channels: int, out_channels: int, kernel_size: int = 3, bias: bool = True, drop_p: float = 0.2) -> nn.Sequential:
+    def _conv_block(in_channels: int, out_channels: int, kernel_size: int = 3, bias: bool = True, drop_p: float = 0.15) -> nn.Sequential:
         padding = kernel_size // 2
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding, bias=bias),
@@ -368,59 +345,75 @@ class UNetTrajGRU(nn.Module):
             nn.ReLU(inplace=True),
             nn.Dropout2d(drop_p),
         )
-    
-    def forward(self, x):
+
+    def _decode_branch(
+        self,
+        e3: torch.Tensor, e2: torch.Tensor, e1: torch.Tensor,
+        upconv3: nn.Module, dec3: nn.Module,
+        upconv2: nn.Module, dec2: nn.Module,
+        attn3: Optional[nn.Module], attn2: Optional[nn.Module],
+    ) -> torch.Tensor:
+        """Runs one decoder branch once, using the final encoder states."""
+        d3 = upconv3(e3)
+        d3 = F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False)
+        skip2 = attn3(gate=d3, skip=e2) if attn3 is not None else e2
+        d3 = torch.cat([d3, skip2], dim=1)
+        d3 = dec3(d3)
+
+        d2 = upconv2(d3)
+        d2 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
+        skip1 = attn2(gate=d2, skip=e1) if attn2 is not None else e1
+        d2 = torch.cat([d2, skip1], dim=1)
+        d2 = dec2(d2)
+
+        return d2
+
+    def forward(self, x: torch.Tensor):
         B, T, _, H, W = x.shape
         device = x.device
 
-        # initialize states using first frame sizes
-        e1 = self.enc1(x[:, 0])
-        state1 = self.temporal1.init_state(batch_size=B,height=e1.shape[-2],width=e1.shape[-1],device=device)
-        
-        e2 = self.enc2(self.pool(e1))
-        state2 = self.temporal2.init_state(batch_size=B,height=e2.shape[-2],width=e2.shape[-1],device=device)
-        
-        e3 = self.enc3(self.pool(e2))
-        state3 = self.temporal3.init_state(batch_size=B,height=e3.shape[-2],width=e3.shape[-1],device=device)
+        # Spatial dims after each 2x2 maxpool -- computed directly, no need
+        # to run the encoder on frame 0 just to read off shapes.
+        h1, w1 = H, W
+        h2, w2 = h1 // 2, w1 // 2
+        h3, w3 = h2 // 2, w2 // 2
 
-        # ---- Encoder + Temporal recurrence ----
+        state1 = self.temporal1.init_state(batch_size=B, height=h1, width=w1, device=device)
+        state2 = self.temporal2.init_state(batch_size=B, height=h2, width=w2, device=device)
+        state3 = self.temporal3.init_state(batch_size=B, height=h3, width=w3, device=device)
+
+        e1 = e2 = e3 = None
+
         for t in range(T):
-
             e1 = self.enc1(x[:, t])
             state1 = self.temporal1(e1, state1)
             e1 = state1
 
             e2 = self.enc2(self.pool(e1))
-            state2 = self.temporal2(e2,state2)
+            state2 = self.temporal2(e2, state2)
             e2 = state2
 
             e3 = self.enc3(self.pool(e2))
-            state3 = self.temporal3(e3,state3)
+            state3 = self.temporal3(e3, state3)
             e3 = state3
 
-        # last timestep hidden states
-        e1_last = state1
-        e2_last = state2
-        e3_last = state3
+        # Decode once, after the temporal encoder has consumed the whole
+        # sequence -- not once per timestep with all but the last discarded.
+        decoder_last_a = self._decode_branch(
+            e3, e2, e1,
+            self.upconv3_a, self.dec3_a,
+            self.upconv2_a, self.dec2_a,
+            self.attn3_a, self.attn2_a,
+        )
 
-        # ---- Decoder ----
-        d3 = self.upconv3(e3_last)
-        d3 = F.interpolate(d3,size=e2_last.shape[-2:],mode="bilinear",align_corners=False)
-        
-        skip2 = (self.attn3(gate=d3, skip=e2_last) if self.use_attention_gates else e2_last)
+        decoder_last_b = self._decode_branch(
+            e3, e2, e1,
+            self.upconv3_b, self.dec3_b,
+            self.upconv2_b, self.dec2_b,
+            self.attn3_b, self.attn2_b,
+        )
 
-        d3 = torch.cat([d3, skip2], dim=1)
-        d3 = self.dec3(d3)
-
-        d2 = self.upconv2(d3)
-        d2 = F.interpolate(d2,size=e1_last.shape[-2:],mode="bilinear",align_corners=False)
-        
-        skip1 = (self.attn2(gate=d2, skip=e1_last)if self.use_attention_gates else e1_last)
-
-        d2 = torch.cat([d2, skip1], dim=1)
-        d2 = self.dec2(d2)
-
-        rain_logit = self.prob_head(d2)
-        intensity_pred = self.intensity_head(d2)
+        rain_logit = self.prob_head(decoder_last_a)
+        intensity_pred = self.intensity_head(decoder_last_b)
 
         return rain_logit, intensity_pred
