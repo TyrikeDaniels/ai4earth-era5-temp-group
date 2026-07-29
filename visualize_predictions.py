@@ -1,35 +1,36 @@
+cat > visualize_predictions.py << 'EOF'
 import argparse
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
-from datsa_loader import get_data_loader
+from data_loader import get_data_loader
 from u_net_model import UNet
 from utils.YParams import YParams
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("yaml_config", default='config.yaml', type=str)
+    parser.add_argument("--yaml_config", default='config.yaml', type=str)
     parser.add_argument("--config", default='t2m_all_channels', type=str)
     parser.add_argument("--checkpoint", default='checkpoints/best_unet_model.pt', type=str)
     parser.add_argument("--sample_idx", default=0, type=int,
-                        help="Which validation sample to visualize")
+                         help="Which validation sample to visualize")
     args = parser.parse_args()
 
     params = YParams(args.yaml_config, args.config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    val_loader, cal_dataset = get_data_loader(params, train=False, shuffle=False)
+    val_loader, val_dataset = get_data_loader(params, train=False, shuffle=False)
 
     # Load the trained model
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     in_channels = checkpoint.get('in_channels', len(params.era5_channel_input))
-    out_channels = checkpoint.get('out_channels', len(params.era5_channel_input))
+    out_channels = checkpoint.get('out_channels', len(params.era5_channel_output))
     bilinear = checkpoint.get('bilinear', False)
 
-    model = UNet(n_channels=in_channels, n_classes=out_classes, bilinear=bilinear).to(device)
+    model = UNet(n_channels=in_channels, n_classes=out_channels, bilinear=bilinear).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -45,8 +46,6 @@ def main():
     with torch.no_grad():
         pred = model(x)
 
-    rmse = np.sqrt(np.mean((pred_map - actual_map) ** 2))
-
     pred_map = pred[0, 0].cpu().numpy()
     actual_map = y[0, 0].cpu().numpy()
 
@@ -58,7 +57,8 @@ def main():
         std = norm_stats[output_channel_name]['std']
         pred_map = pred_map * std + mean
         actual_map = actual_map * std + mean
-        
+
+    rmse = np.sqrt(np.mean((pred_map - actual_map) ** 2))
     diff_map = pred_map - actual_map
 
     lat = val_dataset.lat
@@ -73,14 +73,14 @@ def main():
         subplot_kw={'projection': ccrs.PlateCarree()},
     )
 
-    # Shared color scale
+    # Shared color scale for actual/predicted
     vmin = min(actual_map.min(), pred_map.min())
     vmax = max(actual_map.max(), pred_map.max())
 
     for ax, data, title, cmap, vlim in [
         (axes[0], actual_map, f"Actual {output_name}", 'coolwarm', (vmin, vmax)),
         (axes[1], pred_map, f"Predicted {output_name} (RMSE={rmse:.4f})", 'coolwarm', (vmin, vmax)),
-        (axes[2], diff_map, "Difference (pred - actual", 'RdBu_r' (None, None)),
+        (axes[2], diff_map, "Difference (pred - actual)", 'RdBu_r', (None, None)),
     ]:
         im = ax.pcolormesh(
             lon2d, lat2d, data,
@@ -95,10 +95,12 @@ def main():
         ax.set_title(title, fontsize=12)
         plt.colorbar(im, ax=ax, fraction=0.046)
 
-        figsuptitle(f"Model prediction vs. reality - {timestamp}", fontsize=15, fontweight='bold')
-        plt.tight_layout()
-        plt.savefig('prediction_comparison.png', dpi=120)
-        print(f"RMSE for this sample: {rmse:.6f}")
+    fig.suptitle(f"Model prediction vs. reality - {timestamp}", fontsize=15, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig('prediction_comparison.png', dpi=120)
+    print(f"RMSE for this sample: {rmse:.6f}")
 
-    if __name__ == '__main__':
-        main()
+
+if __name__ == '__main__':
+    main()
+EOF
