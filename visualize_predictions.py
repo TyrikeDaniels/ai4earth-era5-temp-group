@@ -1,4 +1,3 @@
-cat > visualize_predictions.py << 'EOF'
 import argparse
 import numpy as np
 import torch
@@ -103,4 +102,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-EOF
