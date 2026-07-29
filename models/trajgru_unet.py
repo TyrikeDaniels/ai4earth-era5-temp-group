@@ -166,6 +166,7 @@ class TrajGRU(nn.Module):
         flows = self.flows_conv(f_conv1)
         # Split into L flow fields of 2 channels each
         flows = torch.split(flows, 2, dim=1)
+
         return flows
  
     def forward(
@@ -191,16 +192,9 @@ class TrajGRU(nn.Module):
         # input transform
         i2h = self.i2h(inputs)
 
-        i2h_slice = torch.split(
-            i2h,
-            self._num_filter,
-            dim=1
-        )
+        i2h_slice = torch.split(i2h, self._num_filter, dim=1)
 
-        flows = self._flow_generator(
-            inputs,
-            prev_h
-        )
+        flows = self._flow_generator(inputs, prev_h)
 
         wrapped_data = []
 
@@ -240,29 +234,7 @@ class TrajGRU(nn.Module):
             (1-update_gate) * new_mem
         )
 
-        return next_h
-
-
-class AttentionGate(nn.Module):
-    """
-    Standard additive attention gate (Attention U-Net style).
-    gate:  the coarser, upsampled decoder feature map
-    skip:  the encoder feature map at the same resolution
-    Returns the skip connection re-weighted by a learned spatial attention mask.
-    """
-
-    def __init__(self, gate_channels: int, skip_channels: int, inter_channels: int):
-        super().__init__()
-        self.theta = nn.Conv2d(gate_channels, inter_channels, kernel_size=1)
-        self.phi = nn.Conv2d(skip_channels, inter_channels, kernel_size=1)
-        self.psi = nn.Conv2d(inter_channels, 1, kernel_size=1)
-
-    def forward(self, gate: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
-        g = self.theta(gate)
-        s = self.phi(skip)
-        combined = F.relu(g + s, inplace=True)
-        attn = torch.sigmoid(self.psi(combined))
-        return skip * attn
+        return next_h, flows
 
 
 class UNetTrajGRU(nn.Module):
@@ -279,10 +251,8 @@ class UNetTrajGRU(nn.Module):
         bias: bool = True,
         trajgru_L: int = 5,
         trajgru_zoneout: float = 0.0,
-        use_attention_gates: bool = False,
     ):
         super().__init__()
-        self.use_attention_gates = use_attention_gates
 
         # Spatial encoder (applied to each timestep independently)
         self.enc1 = self._conv_block(input_channels, hidden_channels[0], kernel_size, bias)
@@ -306,16 +276,6 @@ class UNetTrajGRU(nn.Module):
         self.dec3_b = self._conv_block(hidden_channels[1] + hidden_channels[1], hidden_channels[1], kernel_size, bias)
         self.upconv2_b = nn.ConvTranspose2d(hidden_channels[1], hidden_channels[0], kernel_size=2, stride=2)
         self.dec2_b = self._conv_block(hidden_channels[0] + hidden_channels[0], hidden_channels[0], kernel_size, bias)
-
-        # Attention gates: only created if actually requested. One pair per
-        # decoder branch, matched to the channel counts at each skip level.
-        if use_attention_gates:
-            self.attn3_a = AttentionGate(hidden_channels[1], hidden_channels[1], hidden_channels[1] // 2)
-            self.attn2_a = AttentionGate(hidden_channels[0], hidden_channels[0], hidden_channels[0] // 2)
-            self.attn3_b = AttentionGate(hidden_channels[1], hidden_channels[1], hidden_channels[1] // 2)
-            self.attn2_b = AttentionGate(hidden_channels[0], hidden_channels[0], hidden_channels[0] // 2)
-        else:
-            self.attn3_a = self.attn2_a = self.attn3_b = self.attn2_b = None
 
         self.prob_head = nn.Sequential(
             nn.Conv2d(hidden_channels[0], hidden_channels[0], kernel_size=3, padding=1),
@@ -351,18 +311,17 @@ class UNetTrajGRU(nn.Module):
         e3: torch.Tensor, e2: torch.Tensor, e1: torch.Tensor,
         upconv3: nn.Module, dec3: nn.Module,
         upconv2: nn.Module, dec2: nn.Module,
-        attn3: Optional[nn.Module], attn2: Optional[nn.Module],
     ) -> torch.Tensor:
         """Runs one decoder branch once, using the final encoder states."""
         d3 = upconv3(e3)
         d3 = F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False)
-        skip2 = attn3(gate=d3, skip=e2) if attn3 is not None else e2
+        skip2 = e2
         d3 = torch.cat([d3, skip2], dim=1)
         d3 = dec3(d3)
 
         d2 = upconv2(d3)
         d2 = F.interpolate(d2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
-        skip1 = attn2(gate=d2, skip=e1) if attn2 is not None else e1
+        skip1 = e1
         d2 = torch.cat([d2, skip1], dim=1)
         d2 = dec2(d2)
 
@@ -383,18 +342,17 @@ class UNetTrajGRU(nn.Module):
         state3 = self.temporal3.init_state(batch_size=B, height=h3, width=w3, device=device)
 
         e1 = e2 = e3 = None
-
         for t in range(T):
             e1 = self.enc1(x[:, t])
-            state1 = self.temporal1(e1, state1)
+            state1, flow1 = self.temporal1(e1, state1)
             e1 = state1
 
             e2 = self.enc2(self.pool(e1))
-            state2 = self.temporal2(e2, state2)
+            state2, flow2 = self.temporal2(e2, state2)
             e2 = state2
 
             e3 = self.enc3(self.pool(e2))
-            state3 = self.temporal3(e3, state3)
+            state3, flow3 = self.temporal3(e3, state3)
             e3 = state3
 
         # Decode once, after the temporal encoder has consumed the whole
@@ -403,17 +361,19 @@ class UNetTrajGRU(nn.Module):
             e3, e2, e1,
             self.upconv3_a, self.dec3_a,
             self.upconv2_a, self.dec2_a,
-            self.attn3_a, self.attn2_a,
         )
 
         decoder_last_b = self._decode_branch(
             e3, e2, e1,
             self.upconv3_b, self.dec3_b,
             self.upconv2_b, self.dec2_b,
-            self.attn3_b, self.attn2_b,
         )
 
         rain_logit = self.prob_head(decoder_last_a)
         intensity_pred = self.intensity_head(decoder_last_b)
 
-        return rain_logit, intensity_pred
+        return (
+            rain_logit, 
+            intensity_pred, 
+            [flow1, flow2, flow3] # for flow field plot
+        )

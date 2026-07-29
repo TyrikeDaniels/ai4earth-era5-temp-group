@@ -108,7 +108,7 @@ def train(
         # Output
         print(f"Epoch {epoch:02d}")
         print(f"  Train | net loss = {avg_loss:.4f} bce={avg_bce:.4f} mse={avg_mse:.4f} | p={train_precision:.3f} r={train_recall:.3f} mcc={train_mcc:.3f}")
-        print(f"  Val   | net loss = {val_metrics['loss']:.4f} bce={val_metrics['bce_loss']:.4f} mse={val_metrics['mse_loss']:.4f} | p={val_metrics['mcc']:.3f} r={val_metrics['recall']:.3f} mcc={val_metrics['mcc']:.3f}")
+        print(f"  Val   | net loss = {val_metrics['loss']:.4f} bce={val_metrics['bce_loss']:.4f} mse={val_metrics['mse_loss']:.4f} | p={val_metrics['precision']:.3f} r={val_metrics['recall']:.3f} mcc={val_metrics['mcc']:.3f}")
         print(f"  LR    | {optimizer.param_groups[0]['lr']:.2e}")
 
         # Benchmark
@@ -139,7 +139,7 @@ def main():
     print(f"Using device: {device}")
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    for dt in [1, 2, 3, 4]:
+    for dt in [4]:
         params = load_params(dt)
 
         train_dataloader, _ = get_data_loader(params, train=True, shuffle=True)

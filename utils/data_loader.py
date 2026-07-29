@@ -18,6 +18,33 @@ dask.config.set(scheduler='synchronous')
 
 # Constants
 DATA_ROOT = '/users/8/dani0883/ai4earth-era5-temp-group/era5_data'
+
+
+def _resolve_channel_names(requested_channels, available_channels):
+    """Normalize channel requests to channel names.
+
+    Accepts either channel names (strings) or integer positions.
+    Integer positions are resolved against the available channel list.
+    """
+    if requested_channels is None:
+        return []
+
+    if isinstance(requested_channels, (str, int, np.integer)):
+        requested_channels = [requested_channels]
+
+    resolved_channels = []
+    for channel in requested_channels:
+        if isinstance(channel, (int, np.integer)):
+            idx = int(channel)
+            if idx < 0:
+                idx += len(available_channels)
+            if idx < 0 or idx >= len(available_channels):
+                raise IndexError(f"Channel index {channel} is out of range for {len(available_channels)} channels")
+            resolved_channels.append(available_channels[idx])
+        else:
+            resolved_channels.append(channel)
+
+    return resolved_channels
     
 def worker_init(wrk_id):
     """Initialize worker with a unique seed for data loading randomization"""
@@ -236,6 +263,9 @@ class UnifiedERA5Dataset(Dataset):
         self.lat = self.data.latitude.values.copy()
         self.lon = self.data.longitude.values.copy()
         self.channels = self.data.channel.values.copy()
+
+        self.input_channels = _resolve_channel_names(self.input_channels, self.channels)
+        self.output_channels = _resolve_channel_names(self.output_channels, self.channels)
         
         # Verify that all requested channels are available
         missing_input_channels = set(self.input_channels) - set(self.channels)

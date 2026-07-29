@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import os, sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.YParams import YParams
@@ -75,8 +76,8 @@ def evaluate(
         "precision": precision, "recall": recall, "mcc": mcc
     }
 
-weighted_mse = WeightedMSELoss()
 
+weighted_mse = WeightedMSELoss()
 def compute_loss(
     rain_logit: torch.Tensor,
     intensity_pred: torch.Tensor,
@@ -119,6 +120,7 @@ def compute_loss(
         'precision': precision, 'recall': recall
     }
 
+
 def load_params(dt: int = 1):
 
     # Set parameters 
@@ -131,20 +133,20 @@ def load_params(dt: int = 1):
     # Load configuration and create data loader
     params = YParams(args.yaml_config, args.config)
     
-    WIND_SURFACE = ["u10", "v10"]                     # 10m wind components
-    TEMPERATURE_SURFACE = ["t2m"]                     # 2m surface temperature
-    SURFACE = ["skt", "lsm"]                          # skin temp, land-sea mask
-    PRECIP = ["avg_tprate"]                           # OUTPUT TARGET, not an input
+    WIND_SURFACE = ["u10", "v10"]                      # 10m wind components
+    TEMPERATURE_SURFACE = ["t2m"]                      # 2m surface temperature
+    SURFACE = ["skt", "lsm"]                           # skin temp, land-sea mask
+    PRECIP = ["avg_tprate"]                            # OUTPUT TARGET, not an input
     
     GEOPOTENTIAL = ["z_1000", "z_600", "z_200"]        # height of pressure surfaces
     TEMPERATURE_ALTITUDE = ["t_800", "t_600", "t_400"] # air temp at altitude
     HUMIDITY = ["q_1000", "q_800", "q_600"]            # water vapor content
     WIND_U = ["u_800", "u_600", "u_400"]               # zonal wind at altitude
     WIND_V = ["v_800", "v_600", "v_400"]               # meridional wind at altitude
-    CLOUD_LIQUID = ["clwc_800", "clwc_600", "clwc_400"]  # cloud liquid water content
-    CLOUD_ICE = ["ciwc_800", "ciwc_600", "ciwc_400"]     # cloud ice water content
-    
-    input_channels = WIND_SURFACE + SURFACE + GEOPOTENTIAL + TEMPERATURE_ALTITUDE + HUMIDITY + WIND_U + WIND_V + CLOUD_LIQUID + CLOUD_ICE + TEMPERATURE_SURFACE 
+    CLOUD_LIQUID = ["clwc_800", "clwc_600", "clwc_400"]# cloud liquid water content
+    CLOUD_ICE = ["ciwc_800", "ciwc_600", "ciwc_400"]   # cloud ice water content
+
+    input_channels = WIND_SURFACE + TEMPERATURE_SURFACE + SURFACE + GEOPOTENTIAL + TEMPERATURE_ALTITUDE + HUMIDITY + WIND_U + WIND_V + CLOUD_LIQUID + CLOUD_ICE
 
     params.local_batch_size = 5
     params.num_data_workers = 3

@@ -63,7 +63,7 @@ def train(
 
             optimizer.zero_grad()
 
-            rain_logit, intensity_pred = model(x)
+            rain_logit, intensity_pred, _ = model(x)
             metrics = compute_loss(
                 rain_logit=rain_logit,
                 intensity_pred=intensity_pred,
