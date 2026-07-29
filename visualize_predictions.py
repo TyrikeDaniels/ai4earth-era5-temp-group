@@ -45,10 +45,20 @@ def main():
     with torch.no_grad():
         pred = model(x)
 
-    rmse = torch.squrt(torch.mean((pred-y) ** 2)).item()
+    rmse = np.sqrt(np.mean((pred_map - actual_map) ** 2))
 
     pred_map = pred[0, 0].cpu().numpy()
     actual_map = y[0, 0].cpu().numpy()
+
+    # Unnormalize back to real Kelvin values
+    output_channel_name = params.era5_channel_output[0]
+    norm_stats = checkpoint.get('norm_stats', None)
+    if norm_stats is not None and output_channel_name in norm_stats:
+        mean = norm_stats[output_channel_name]['mean']
+        std = norm_stats[output_channel_name]['std']
+        pred_map = pred_map * std + mean
+        actual_map = actual_map * std + mean
+        
     diff_map = pred_map - actual_map
 
     lat = val_dataset.lat
