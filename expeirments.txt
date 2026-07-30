@@ -1,152 +1,32 @@
-Benchmark training/validation results
+(flow_fields.py)
 
-T-Unet (TrajGRU Unet)
+The general idea is: TrajGRU works by tracking sequential moving patterns 
+that are relevant to the target variable. Why not find the correlation 
+between what the flow field vectors point to, and some meaningful feature?
 
-dt = 1:
+The `flows` tuple returned contains several flow trajectories generated
+during inference — flow 1 is generated at the firstmost layer and contains 
+the most atmospheric relevant trajectories.
 
-Epoch 00
-  Train | loss=2.1898 bce=0.8521 int=2.2295 | p=0.534 r=0.843 f1=0.653
-  Val   | loss=1.9800 bce=0.7408 int=2.0653 | p=0.602 r=0.854 f1=0.706
-  LR    | 5.50e-04
-Epoch 01
-  Train | loss=2.0470 bce=0.7657 int=2.1355 | p=0.591 r=0.852 f1=0.698
-  Val   | loss=2.0149 bce=0.7305 int=2.1408 | p=0.617 r=0.843 f1=0.713
-  LR    | 1.00e-03
-Epoch 02
-  Train | loss=1.9998 bce=0.7402 int=2.0993 | p=0.596 r=0.860 f1=0.704
-  Val   | loss=2.0482 bce=0.7091 int=2.2317 | p=0.612 r=0.867 f1=0.717
-  LR    | 9.97e-04
-Epoch 03
-  Train | loss=1.9510 bce=0.7187 int=2.0538 | p=0.605 r=0.867 f1=0.713
-  Val   | loss=1.8503 bce=0.6970 int=1.9222 | p=0.659 r=0.838 f1=0.738
-  LR    | 9.87e-04
-Epoch 04
-  Train | loss=1.9218 bce=0.7069 int=2.0249 | p=0.607 r=0.872 f1=0.716
-  Val   | loss=1.9660 bce=0.7401 int=2.0431 | p=0.659 r=0.818 f1=0.730
-  LR    | 9.72e-04
-Epoch 05
-  Train | loss=1.9000 bce=0.6980 int=2.0032 | p=0.611 r=0.872 f1=0.719
-  Val   | loss=1.8045 bce=0.6755 int=1.8817 | p=0.664 r=0.844 f1=0.743
-  LR    | 9.50e-04
-Epoch 06
-  Train | loss=1.8608 bce=0.6873 int=1.9559 | p=0.615 r=0.876 f1=0.723
-  Val   | loss=1.8406 bce=0.6677 int=1.9550 | p=0.650 r=0.861 f1=0.741
-  LR    | 9.23e-04
-Epoch 07
-  Train | loss=1.8712 bce=0.6842 int=1.9782 | p=0.616 r=0.878 f1=0.724
-  Val   | loss=1.8062 bce=0.6622 int=1.9066 | p=0.627 r=0.886 f1=0.734
-  LR    | 8.91e-04
-Epoch 08
-  Train | loss=1.8452 bce=0.6756 int=1.9494 | p=0.619 r=0.881 f1=0.727
-  Val   | loss=1.8173 bce=0.6647 int=1.9210 | p=0.612 r=0.904 f1=0.730
-  LR    | 8.54e-04
-Epoch 09
-  Train | loss=1.8243 bce=0.6705 int=1.9231 | p=0.620 r=0.881 f1=0.728
-  Val   | loss=1.7899 bce=0.6388 int=1.9184 | p=0.637 r=0.892 f1=0.743
-  LR    | 8.12e-04
-Epoch 10
-  Train | loss=1.8135 bce=0.6660 int=1.9125 | p=0.621 r=0.885 f1=0.730
-  Val   | loss=1.7685 bce=0.6556 int=1.8547 | p=0.661 r=0.863 f1=0.748
-  LR    | 7.66e-04
-Epoch 11
-  Train | loss=1.7952 bce=0.6587 int=1.8941 | p=0.624 r=0.886 f1=0.733
-  Val   | loss=1.7638 bce=0.6422 int=1.8693 | p=0.655 r=0.873 f1=0.749
-  LR    | 7.17e-04
-Epoch 12
-  Train | loss=1.7841 bce=0.6538 int=1.8839 | p=0.626 r=0.886 f1=0.734
-  Val   | loss=1.7175 bce=0.6349 int=1.8043 | p=0.629 r=0.896 f1=0.739
-  LR    | 6.65e-04
-Epoch 13
-  Train | loss=1.7632 bce=0.6484 int=1.8579 | p=0.630 r=0.887 f1=0.736
-  Val   | loss=1.7237 bce=0.6272 int=1.8274 | p=0.650 r=0.886 f1=0.750
-  LR    | 6.11e-04
-Epoch 14
-  Train | loss=1.7621 bce=0.6446 int=1.8624 | p=0.630 r=0.889 f1=0.737
-  Val   | loss=1.7162 bce=0.6295 int=1.8110 | p=0.654 r=0.885 f1=0.752
-  LR    | 5.56e-04
-Epoch 15
-  Train | loss=1.7500 bce=0.6408 int=1.8487 | p=0.633 r=0.889 f1=0.739
-  Val   | loss=1.7154 bce=0.6240 int=1.8190 | p=0.641 r=0.897 f1=0.748
-  LR    | 5.00e-04
-Epoch 16
-  Train | loss=1.7257 bce=0.6368 int=1.8148 | p=0.634 r=0.889 f1=0.740
-  Val   | loss=1.6866 bce=0.6204 int=1.7769 | p=0.674 r=0.874 f1=0.761
-  LR    | 4.44e-04
-Epoch 17
-  Train | loss=1.7098 bce=0.6320 int=1.7963 | p=0.637 r=0.890 f1=0.743
-  Val   | loss=1.7050 bce=0.6250 int=1.8001 | p=0.651 r=0.886 f1=0.751
-  LR    | 3.89e-04
-Epoch 18
-  Train | loss=1.7016 bce=0.6283 int=1.7889 | p=0.637 r=0.893 f1=0.743
-  Val   | loss=1.6780 bce=0.6123 int=1.7762 | p=0.658 r=0.887 f1=0.756
-  LR    | 3.35e-04
-Epoch 19
-  Train | loss=1.6995 bce=0.6259 int=1.7893 | p=0.637 r=0.894 f1=0.744
-  Val   | loss=1.7088 bce=0.6158 int=1.8216 | p=0.662 r=0.885 f1=0.757
-  LR    | 2.83e-04
-Epoch 20
-  Train | loss=1.6796 bce=0.6234 int=1.7604 | p=0.639 r=0.894 f1=0.745
-  Val   | loss=1.6817 bce=0.6126 int=1.7818 | p=0.649 r=0.897 f1=0.753
-  LR    | 2.34e-04
-Epoch 21
-  Train | loss=1.6667 bce=0.6203 int=1.7440 | p=0.640 r=0.894 f1=0.746
-  Val   | loss=1.6796 bce=0.6130 int=1.7778 | p=0.656 r=0.891 f1=0.756
-  LR    | 1.88e-04
-Epoch 22
-  Train | loss=1.6630 bce=0.6170 int=1.7434 | p=0.642 r=0.895 f1=0.748
-  Val   | loss=1.6935 bce=0.6093 int=1.8071 | p=0.659 r=0.892 f1=0.758
-  LR    | 1.46e-04
-Epoch 23
-  Train | loss=1.6565 bce=0.6175 int=1.7317 | p=0.642 r=0.895 f1=0.747
-  Val   | loss=1.6711 bce=0.6077 int=1.7723 | p=0.661 r=0.890 f1=0.759
-  LR    | 1.09e-04
-Epoch 24
-  Train | loss=1.6294 bce=0.6123 int=1.6953 | p=0.643 r=0.897 f1=0.749
-  Val   | loss=1.6905 bce=0.6086 int=1.8033 | p=0.660 r=0.890 f1=0.758
-  LR    | 7.66e-05
-Epoch 25
-  Train | loss=1.6343 bce=0.6122 int=1.7036 | p=0.644 r=0.896 f1=0.749
-  Val   | loss=1.6933 bce=0.6085 int=1.8079 | p=0.670 r=0.883 f1=0.762
-  LR    | 4.95e-05
-Epoch 26
-  Train | loss=1.6317 bce=0.6109 int=1.7013 | p=0.645 r=0.896 f1=0.750
-  Val   | loss=1.6956 bce=0.6071 int=1.8142 | p=0.666 r=0.887 f1=0.760
-  LR    | 2.81e-05
-Epoch 27
-  Train | loss=1.6216 bce=0.6101 int=1.6859 | p=0.646 r=0.896 f1=0.751
-  Val   | loss=1.6882 bce=0.6059 int=1.8038 | p=0.663 r=0.890 f1=0.760
-  LR    | 1.25e-05
-Epoch 28
-  Train | loss=1.6294 bce=0.6104 int=1.6983 | p=0.644 r=0.897 f1=0.750
-  Val   | loss=1.6789 bce=0.6056 int=1.7889 | p=0.662 r=0.891 f1=0.759
-  LR    | 3.14e-06
-Epoch 29
-  Train | loss=1.6169 bce=0.6102 int=1.6779 | p=0.644 r=0.897 f1=0.750
-  Val   | loss=1.6822 bce=0.6054 int=1.7945 | p=0.664 r=0.889 f1=0.760
-  LR    | 0.00e+00
+Several links (5) are contained within the flow tensor and, themselves, 
+contain two channels — one for the x-component of the traced neighbor,
+and the other for the y-component.
 
-dt = 2:
+The x/y components of each link is then averaged, creating a mean resultant
+vector — the learned trajectory. 
 
+Usage:
+  - Flow Field Animation overlay of 
+  - Aligmnet score between meaningful features (z_1000)
 
-
-dt = 3:
-
-
-dt = 4:
-
-
-L-Unet (ConvLSTM Unet)
-
-dt = 1:
-
-
-dt = 2:
-
-
-dt = 3:
-
-
-dt = 4:
+The aligmnet (consine similarity) score: Each trajectory (or link) is trained to determine the 
+x/y components of a vector that identifies a pattern in motion; and it 
+does this for every pixel observed (H,W). This means that the trajectory
+tensors have a size = (2, H, W).The tensors are then stacked along the first 
+dimensions (0), and then averaged; producing a single vector that generalizes 
+the path observed by a single window (u_agg and v_agg). These vectors are then
+compared to the direction of movement of a (particular) variable — computed using
+np.gradient.
 
 
 
