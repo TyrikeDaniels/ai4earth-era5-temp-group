@@ -1,0 +1,32 @@
+(flow_fields.py)
+
+The general idea is: TrajGRU works by tracking sequential moving patterns 
+that are relevant to the target variable. Why not find the correlation 
+between what the flow field vectors point to, and some meaningful feature?
+
+The `flows` tuple returned contains several flow trajectories generated
+during inference — flow 1 is generated at the firstmost layer and contains 
+the most atmospheric relevant trajectories.
+
+Several links (5) are contained within the flow tensor and, themselves, 
+contain two channels — one for the x-component of the traced neighbor,
+and the other for the y-component.
+
+The x/y components of each link is then averaged, creating a mean resultant
+vector — the learned trajectory. 
+
+Usage:
+  - Flow Field Animation overlay of 
+  - Aligmnet score between meaningful features (z_1000)
+
+The aligmnet (consine similarity) score: Each trajectory (or link) is trained to determine the 
+x/y components of a vector that identifies a pattern in motion; and it 
+does this for every pixel observed (H,W). This means that the trajectory
+tensors have a size = (2, H, W).The tensors are then stacked along the first 
+dimensions (0), and then averaged; producing a single vector that generalizes 
+the path observed by a single window (u_agg and v_agg). These vectors are then
+compared to the direction of movement of a (particular) variable — computed using
+np.gradient.
+
+
+

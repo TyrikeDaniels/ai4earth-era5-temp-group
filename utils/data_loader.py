@@ -17,8 +17,35 @@ import dask
 dask.config.set(scheduler='synchronous')
 
 # Constants
-DATA_ROOT = '/projects/standard/kumarv/shared/ai_for_earth_era5/datasets'
+DATA_ROOT = '/users/8/dani0883/ai4earth-era5-temp-group/era5_data'
 
+
+def _resolve_channel_names(requested_channels, available_channels):
+    """Normalize channel requests to channel names.
+
+    Accepts either channel names (strings) or integer positions.
+    Integer positions are resolved against the available channel list.
+    """
+    if requested_channels is None:
+        return []
+
+    if isinstance(requested_channels, (str, int, np.integer)):
+        requested_channels = [requested_channels]
+
+    resolved_channels = []
+    for channel in requested_channels:
+        if isinstance(channel, (int, np.integer)):
+            idx = int(channel)
+            if idx < 0:
+                idx += len(available_channels)
+            if idx < 0 or idx >= len(available_channels):
+                raise IndexError(f"Channel index {channel} is out of range for {len(available_channels)} channels")
+            resolved_channels.append(available_channels[idx])
+        else:
+            resolved_channels.append(channel)
+
+    return resolved_channels
+    
 def worker_init(wrk_id):
     """Initialize worker with a unique seed for data loading randomization"""
     np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
@@ -55,8 +82,12 @@ def get_data_loader(params, train=True, shuffle=True):
         output_channels=params.era5_channel_output,
         region=getattr(params, 'region', 'us_midwest'),
         dt=getattr(params, 'dt', 6),  # Time interval in hours
+        seq_len=getattr(params, 'seq_len', 6),  # Number of input timesteps
     )
 
+    # Cache raw data arrays before creating the DataLoader so workers can access them
+    cache_raw_dataset(dataset)
+       
     # Create subset if needed
     if getattr(params, 'is_subset', False):
         indices = np.arange(params.step_start, params.step_end)
@@ -79,6 +110,12 @@ def get_data_loader(params, train=True, shuffle=True):
     )
 
     return dataloader, dataset
+
+def cache_raw_dataset(dataset):
+    """Eagerly load the dataset's raw data once, in place. No normalization here —
+    that happens later, per-sample, in __getitem__."""
+    dataset.input_data_cached = dataset.data.data.sel(channel=dataset.input_channels).values
+    dataset.output_data_cached = dataset.data.data.sel(channel=dataset.output_channels).values
 
 class SubDataset(Subset):
     """
@@ -126,16 +163,18 @@ class UnifiedERA5Dataset(Dataset):
         output_channels: List[str],
         region: str = 'us_midwest',
         dt: int = 6,  # Time interval in hours
+        seq_len: int = 6,  # Number of input timesteps
     ):
         """
         Initialize the dataset.
         
         Args:
-            years: List of years to load data from
-            input_channels: List of ERA5 input channels to use
-            output_channels: List of ERA5 output channels to use
-            region: Region to load data for (e.g., 'us_midwest')
-            dt: Time interval in hours
+            years (List[int]): Years to load data from.
+            input_channels (List[str]): ERA5 input channel names to use.
+            output_channels (List[str]): ERA5 output channel names to use.
+            region (str): Region identifier to load data for (e.g., 'us_midwest').
+            dt (int): Time interval between timesteps, in hours.
+            seq_len (int): Number of input timesteps in each sample.
         """
         self.years = sorted(years)
         self.input_channels = input_channels
@@ -143,51 +182,90 @@ class UnifiedERA5Dataset(Dataset):
         self.region = region
         self.dt = dt
         self._load_datasets()
+        self.seq_len = seq_len
+        self.input_data_cached = None
+        self.output_data_chaced = None
+
+        input_xr = self.data.data.sel(channel=self.input_channels)
+        
+        self.input_mean = (
+            input_xr
+            .mean(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+        self.input_std = (
+            input_xr
+            .std(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+
+        output_xr = self.data.data.sel(channel=self.output_channels) * 3600.0 # meters -> millimeters
+        log_output_xr = np.log1p(output_xr)                                   # xarray dispatches np.log1p elementwise (?)
+
+        self.output_mean = (
+            log_output_xr
+            .mean(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
+
+        self.output_std = (
+            log_output_xr
+            .std(dim=["time", "latitude", "longitude"])
+            .compute()
+            .values
+        )
 
     def __len__(self):
-        return len(self.data.time)
+        return len(self.data.time) - self.seq_len
 
     def __getitem__(self, idx):
-        # Extract input and output data for selected channels at the given time index
-        input_data = self.data.data.sel(channel=self.input_channels).isel(time=idx).values
-        output_data = self.data.data.sel(channel=self.output_channels).isel(time=idx).values
+        x_raw = self.input_data_cached[idx: idx + self.seq_len]
+        y_raw_m = self.output_data_cached[idx + self.seq_len]
+        y_raw = y_raw_m * 3600.0
+
+        x_norm = (x_raw - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+
+        log_y = np.log1p(y_raw)
+        log_y_norm = (log_y - self.output_mean[:, None, None]) / self.output_std[:, None, None]
         
-        # Get timestamp
-        timestamp = self.data.time.isel(time=idx).values
-        
-        result = {
-            'input': torch.as_tensor(input_data, dtype=torch.float32), 
-            'output': torch.as_tensor(output_data, dtype=torch.float32), 
-            'timestamp': str(timestamp),
-            'global_idx': idx,
+        return {
+            "input": torch.from_numpy(x_norm).float(),
+            "output_raw": torch.from_numpy(y_raw).float(),
+            "output_log_norm": torch.from_numpy(log_y_norm).float(),
         }
         
-        return result
-    
     def _load_datasets(self):
         """Load all datasets and concatenate them along time dimension"""
-        print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
+        # print(f"Loading unified ERA5 datasets for region '{self.region}' with dt={self.dt}h...")
         
         datasets = []
         
         for year in self.years:
             # Construct file path for unified dataset
             file_path = f'{DATA_ROOT}/{self.region}/{year}_{self.region}_28.zarr'
-            print(f"Loading data for year {year} from: {file_path}")
+            # print(f"Loading data for year {year} from: {file_path}")
             
             # Open dataset with thread synchronizer
             synchronizer = zarr.ThreadSynchronizer()
-            ds = xr.open_zarr(file_path, consolidated=True, synchronizer=synchronizer)
+            ds = xr.open_zarr(file_path, consolidated=False, synchronizer=synchronizer)            
             datasets.append(ds)
         
         # Concatenate all datasets along the time dimension
-        print("Concatenating datasets along time dimension...")
+        # print("Concatenating datasets along time dimension...")
         self.data = xr.concat(datasets, dim='time')
         
         # Store coordinate information
         self.lat = self.data.latitude.values.copy()
         self.lon = self.data.longitude.values.copy()
         self.channels = self.data.channel.values.copy()
+
+        self.input_channels = _resolve_channel_names(self.input_channels, self.channels)
+        self.output_channels = _resolve_channel_names(self.output_channels, self.channels)
         
         # Verify that all requested channels are available
         missing_input_channels = set(self.input_channels) - set(self.channels)
@@ -198,11 +276,11 @@ class UnifiedERA5Dataset(Dataset):
         if missing_output_channels:
             print(f"Warning: Missing output channels: {missing_output_channels}")
         
-        print(f"Available channels: {list(self.channels)}")
-        print(f"Requested input channels: {self.input_channels}")
-        print(f"Requested output channels: {self.output_channels}")
-        print(f"Spatial dimensions: lat={len(self.lat)}, lon={len(self.lon)}")
-        print(f"Dataset loading complete. Total samples: {len(self.data.time)}")
+        # print(f"Available channels: {list(self.channels)}")
+        # print(f"Requested input channels: {self.input_channels}")
+        # print(f"Requested output channels: {self.output_channels}")
+        # print(f"Spatial dimensions: lat={len(self.lat)}, lon={len(self.lon)}")
+        # print(f"Dataset loading complete. Total samples: {len(self.data.time)}")
 
 if __name__ == '__main__':
     """Test script for the simplified data loader

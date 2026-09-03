@@ -1,0 +1,9 @@
+era5_data/
+checkpoints/
+venv/
+__pycache__/
+*.pyc
+*.zarr
+*.pt
+*.zip
+*.gz
