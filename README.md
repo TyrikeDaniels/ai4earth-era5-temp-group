@@ -57,7 +57,7 @@ TrajGRU outperformed ConvLSTM across all lead times (dt=1,2,3,4 hours):
 
 Quiver plot visualizations show that TrajGRU learns meaningful directional patterns:
 
-![Learned atmospheric flow patterns](flows_animated.gif)
+<img width="1800" height="500" alt="flows_animated" src="https://github.com/user-attachments/assets/4303f70e-aeb4-4872-8a84-0c6de115fd39" />
 
 - **Left**: Input geopotential height at 600mb with learned flow vectors
 - **Middle**: Input geopotential height at 1000mb with learned flow vectors  
